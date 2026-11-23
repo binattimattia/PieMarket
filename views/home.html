@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home - Annunci | Piemarket</title>
+    <title>Piemarket — Aste del Piemonte</title>
     <!-- Bootstrap 5 CSS & Icons -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -14,9 +14,9 @@
     <!-- NAVBAR PRINCIPALE -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary sticky-top shadow-sm">
         <div class="container">
-            <a class="navbar-brand text-white" href="/">
-                <i class="bi bi-shop"></i> Piemarket
-                <span class="badge bg-light text-primary brand-badge">Piemonte</span>
+            <a class="navbar-brand text-white fw-bold" href="/">
+                <i class="bi bi-hammer"></i> Piemarket
+                <span class="badge bg-light text-primary brand-badge">Aste Piemonte</span>
             </a>
 
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent">
@@ -26,19 +26,16 @@
             <div class="collapse navbar-collapse" id="navbarContent">
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                     <li class="nav-item">
-                        <a class="nav-link active" href="/"><i class="bi bi-house"></i> Home</a>
+                        <a class="nav-link active" href="/"><i class="bi bi-speedometer2"></i> Aste in corso</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/my-announcements"><i class="bi bi-collection"></i> I miei annunci</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/offers"><i class="bi bi-tag"></i> Offerte</a>
+                        <a class="nav-link" href="/my-announcements"><i class="bi bi-collection"></i> Le mie aste</a>
                     </li>
                 </ul>
 
                 <div class="d-flex align-items-center gap-2">
                     <button class="btn btn-warning fw-semibold shadow-sm text-dark" data-bs-toggle="modal" data-bs-target="#modalPublish">
-                        <i class="bi bi-plus-circle"></i> Pubblica annuncio
+                        <i class="bi bi-plus-circle"></i> Crea nuova asta
                     </button>
 
                     <div class="dropdown">
@@ -47,8 +44,7 @@
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end shadow">
                             <li><h6 class="dropdown-header">Regione: Piemonte</h6></li>
-                            <li><a class="dropdown-item" href="/my-announcements"><i class="bi bi-card-list"></i> I miei annunci</a></li>
-                            <li><a class="dropdown-item" href="/offers"><i class="bi bi-arrow-left-right"></i> Trattative</a></li>
+                            <li><a class="dropdown-item" href="/my-announcements"><i class="bi bi-card-list"></i> Le mie aste</a></li>
                             <li><hr class="dropdown-divider"></li>
                             <li><button class="dropdown-item text-danger" id="btn-logout"><i class="bi bi-box-arrow-right"></i> Logout</button></li>
                         </ul>
@@ -60,48 +56,28 @@
 
     <!-- CONTENUTO PRINCIPALE -->
     <main class="container my-4 flex-grow-1">
-        <div class="hero-banner text-center">
-            <h2 class="display-6 fw-bold mb-2">Mercato del Piemonte</h2>
-            <p class="lead mb-0">Compra, vendi e regala oggetti tra piemontesi con trattative in tempo reale.</p>
-        </div>
 
-        <!-- Barra di ricerca e filtri -->
-        <div class="card shadow-sm border-0 mb-4 rounded-3">
-            <div class="card-body">
-                <div class="row g-3">
-                    <div class="col-md-8">
-                        <div class="input-group">
-                            <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
-                            <input type="text" id="search-input" class="form-control" placeholder="Cerca tra gli annunci...">
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <select id="price-filter" class="form-select">
-                            <option value="all">Tutti i prezzi</option>
-                            <option value="free">Solo oggetti Gratis</option>
-                            <option value="under20">Fino a 20 €</option>
-                            <option value="20to100">Da 20 € a 100 €</option>
-                            <option value="over100">Oltre 100 €</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
+        <!-- Banner Introduttivo -->
+        <div class="hero-banner text-center">
+            <h2 class="display-6 fw-bold mb-2"><i class="bi bi-stopwatch"></i> Mercato ad Asta del Piemonte</h2>
         </div>
 
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h4 class="fw-bold mb-0 text-secondary">Annunci disponibili</h4>
+            <h4 class="fw-bold mb-0 text-secondary"></i> Tutte le Aste</h4>
         </div>
 
+        <!-- Griglia delle Aste -->
         <div id="announcements-grid" class="row">
-            <!-- Card annunci inserite dinamicamente dal DOM -->
+            <!-- Popolato dinamicamente da client.js -->
         </div>
 
+        <!-- Stato vuoto -->
         <div id="empty-state" class="text-center py-5 d-none">
-            <i class="bi bi-tag text-muted fs-1"></i>
-            <h5 class="mt-3 text-muted">Nessun annuncio trovato</h5>
-            <p class="text-muted small">Non ci sono annunci disponibili o la bacheca è vuota.</p>
+            <i class="bi bi-hourglass-bottom text-muted fs-1"></i>
+            <h5 class="mt-3 text-muted">Nessuna asta presente al momento</h5>
+            <p class="text-muted small">Crea la prima asta per vendere un tuo oggetto tra utenti piemontesi!</p>
             <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modalPublish">
-                Sii il primo a pubblicare un annuncio!
+                Crea un'asta ora
             </button>
         </div>
     </main>
@@ -113,105 +89,114 @@
         </div>
     </footer>
 
-    <!-- MODAL PUBBLICA ANNUNCIO -->
+    <!-- MODAL CREA NUOVA ASTA -->
     <div class="modal fade" id="modalPublish" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content rounded-4 border-0 shadow">
                 <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Nuovo Annuncio</h5>
+                    <h5 class="modal-title"><i class="bi bi-hammer"></i> Crea Nuova Asta</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <form id="form-publish" enctype="multipart/form-data">
                     <div class="modal-body p-4">
                         <div class="mb-3">
-                            <label for="pub-title" class="form-label">1. Titolo *</label>
-                            <input type="text" class="form-control" id="pub-title" name="title" required minlength="3" maxlength="100">
+                            <label for="pub-title" class="form-label fw-semibold">Titolo dell'oggetto *</label>
+                            <input type="text" class="form-control" id="pub-title" name="title" required minlength="3" maxlength="100" placeholder="Es. Orologio vintage, Bicicletta da corsa...">
                         </div>
 
                         <div class="mb-3">
-                            <label for="pub-image" class="form-label">2. Immagine *</label>
+                            <label for="pub-image" class="form-label fw-semibold">Foto dell'oggetto *</label>
                             <input type="file" class="form-control" id="pub-image" name="image" accept="image/jpeg,image/png,image/webp" required>
                         </div>
 
                         <div class="mb-3">
-                            <label for="pub-description" class="form-label">3. Descrizione *</label>
-                            <textarea class="form-control" id="pub-description" name="description" rows="3" required minlength="5" maxlength="1500"></textarea>
+                            <label for="pub-description" class="form-label fw-semibold">Descrizione dettagliata *</label>
+                            <textarea class="form-control" id="pub-description" name="description" rows="3" required minlength="5" maxlength="1500" placeholder="Descrivi le condizioni, dettagli o luogo di ritiro..."></textarea>
                         </div>
 
-                        <div class="mb-3">
-                            <label for="pub-price" class="form-label">4. Prezzo (€) *</label>
-                            <input type="number" class="form-control" id="pub-price" name="price" required min="0" step="1" value="0">
-                            <div class="form-text small text-success">Inserisci 0 se desideri regalare l'oggetto ("Gratis").</div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-sm-6">
+                                <label for="pub-price" class="form-label fw-semibold">Base d'asta (€) *</label>
+                                <div class="input-group">
+                                    <span class="input-group-text">€</span>
+                                    <input type="number" class="form-control" id="pub-price" name="price" required min="1" step="1" value="10">
+                                </div>
+                                <div class="form-text small">Prezzo iniziale di partenza.</div>
+                            </div>
+                            <div class="col-sm-6">
+                                <label for="pub-duration" class="form-label fw-semibold">Durata asta (Timer) *</label>
+                                <select class="form-select" id="pub-duration" name="durationMinutes" required>
+                                    <option value="1">1 minuto (Test rapido)</option>
+                                    <option value="2">2 minuti</option>
+                                    <option value="5" selected>5 minuti</option>
+                                    <option value="10">10 minuti</option>
+                                    <option value="30">30 minuti</option>
+                                    <option value="60">1 ora</option>
+                                    <option value="1440">24 ore</option>
+                                </select>
+                                <div class="form-text small">Tempo totale dell'asta.</div>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer bg-light border-0">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
-                        <button type="submit" class="btn btn-primary" id="btn-submit-publish">Pubblica annuncio</button>
+                        <button type="submit" class="btn btn-primary" id="btn-submit-publish">Avvia Asta</button>
                     </div>
                 </form>
             </div>
         </div>
     </div>
 
-    <!-- MODAL DETTAGLIO ANNUNCIO -->
+    <!-- MODAL DETTAGLIO & STORICO RILANCI -->
     <div class="modal fade" id="modalDetail" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content rounded-4 border-0 shadow">
                 <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-clock-history"></i> Dettaglio Asta & Storico Rilanci</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-                <div class="modal-body p-4 pt-0">
+                <div class="modal-body p-4 pt-2">
                     <div class="row">
-                        <div class="col-md-6 mb-3 mb-md-0">
-                            <div class="rounded-3 overflow-hidden bg-light border" style="height: 320px;">
+                        <div class="col-md-5 mb-3 mb-md-0">
+                            <div class="rounded-3 overflow-hidden bg-light border" style="height: 260px;">
                                 <img id="detail-img" src="" alt="Dettaglio" class="w-100 h-100" style="object-fit: cover;">
                             </div>
-                        </div>
-                        <div class="col-md-6 d-flex flex-column">
-                            <h3 id="detail-title" class="fw-bold mb-2"></h3>
-                            <div id="detail-price" class="fs-4 text-primary mb-3"></div>
-                            <div class="mb-3">
-                                <h6 class="text-muted small text-uppercase fw-bold">Descrizione</h6>
-                                <p id="detail-description" class="text-secondary small" style="white-space: pre-line;"></p>
-                            </div>
-                            <div class="mt-auto pt-3 border-top small text-muted">
-                                <div><i class="bi bi-person"></i> Venditore: <strong id="detail-seller"></strong></div>
-                                <div><i class="bi bi-calendar3"></i> Data: <span id="detail-date"></span></div>
-                                <div><i class="bi bi-geo-alt"></i> Territorio: <strong>Piemonte</strong></div>
+                            <div class="mt-2 text-center p-2 rounded bg-light border">
+                                <div class="small text-muted">Tempo Rimanente:</div>
+                                <div class="fs-4 fw-bold text-danger" id="detail-timer">--:--</div>
                             </div>
                         </div>
-                    </div>
-                </div>
-                <div class="modal-footer bg-light border-0" id="detail-actions"></div>
-            </div>
-        </div>
-    </div>
+                        <div class="col-md-7 d-flex flex-column">
+                            <h4 id="detail-title" class="fw-bold mb-1"></h4>
+                            <p id="detail-description" class="text-secondary small mb-3"></p>
 
-    <!-- MODAL FAI UN'OFFERTA -->
-    <div class="modal fade" id="modalMakeOffer" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content rounded-4 border-0 shadow">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title"><i class="bi bi-chat-quote"></i> Proponi Offerta</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body p-4">
-                    <p class="mb-2">Annuncio: <strong id="offer-target-title"></strong></p>
-                    <p class="text-muted small mb-3">Prezzo richiesto: <span id="offer-original-price" class="fw-bold"></span></p>
+                            <div class="p-3 bg-light rounded-3 border mb-3">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="text-muted small">Prezzo di partenza:</span>
+                                    <span class="fw-bold" id="detail-starting-price">-- €</span>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top">
+                                    <span class="fw-semibold">Migliore offerta attuale:</span>
+                                    <span class="fs-3 fw-bold text-success" id="detail-current-bid">-- €</span>
+                                </div>
+                                <div class="small text-muted mt-1 text-end">
+                                    Offerta da: <strong class="text-dark" id="detail-highest-bidder">Nessuno</strong>
+                                </div>
+                            </div>
 
-                    <div class="mb-3">
-                        <label for="offer-amount-input" class="form-label fw-semibold">La tua proposta di prezzo (€)</label>
-                        <input type="number" class="form-control" id="offer-amount-input" min="0" step="1" required>
+                            <div class="mt-auto">
+                                <h6 class="fw-bold small text-uppercase text-muted mb-2"><i class="bi bi-list-ol"></i> Storico Rilanci</h6>
+                                <div id="detail-bids-list" style="max-height: 140px; overflow-y: auto;" class="border rounded p-2 bg-white small">
+                                    <!-- Cronologia puntate -->
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="mb-3">
-                        <label for="offer-message-input" class="form-label">Messaggio (facoltativo)</label>
-                        <textarea class="form-control" id="offer-message-input" rows="2" placeholder="Es. Consegna a mano a Torino..."></textarea>
+                    <!-- Azioni di offerta rapida nel modale -->
+                    <div class="mt-4 pt-3 border-top" id="detail-bid-actions">
+                        <!-- Popolato dinamicamente -->
                     </div>
-                </div>
-                <div class="modal-footer bg-light border-0">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
-                    <button type="button" class="btn btn-primary" id="btn-send-offer">Invia Offerta</button>
                 </div>
             </div>
         </div>

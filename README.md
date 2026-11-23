@@ -1,72 +1,46 @@
-# PIEMARKET — Piattaforma Web Regionale per il Piemonte (Versione Compatta e Didattica)
+# PIEMARKET — Mercato ad Asta del Piemonte (TPSIT)
 
-Progetto didattico per la materia **TPSIT**, sviluppato secondo una struttura **compatta, lineare e semplice da comprendere**, mantenendo al contempo ordine e pulizia del codice.
-
----
-
-## 1. Architettura Compatta del Progetto
-
-Il codice è stato unificato per evitare dispersioni in molteplici sottocartelle:
-- **Tutto il Backend in un unico file**: [server.js](file:///home/mattia/Documenti/TPSIT/server.js) contiene la configurazione di Express, il modulo core `http`, il server WebSocket (`ws`), la lettura/scrittura atomica dei file JSON e tutte le rotte API;
-- **Tutto il Frontend JavaScript in un unico file**: [public/js/client.js](file:///home/mattia/Documenti/TPSIT/public/js/client.js) gestisce lo stato utente, la connessione WebSocket, le chiamate HTTP e la manipolazione del DOM di tutte le pagine;
-- **Persistenza su 3 file JSON essenziali**: memorizzati in `data/` (`users.json`, `announcements.json`, `offers.json`).
-
-```text
-piemarket/
-│
-├── server.js                      # Tutto il backend (Express, rotte API, I/O JSON, ws)
-├── package.json                   # Dipendenze essenziali: express, ws, multer
-├── test.js                        # Test di verifica automatico
-├── README.md                      # Documentazione del progetto
-├── FLUSSO_FUNZIONALITA_PIEMARKET.md # Spiegazione passo per passo
-│
-├── data/                          # Cartella dati JSON
-│   ├── users.json                 # Utenti registrati (ID user1, user2...)
-│   ├── announcements.json         # Annunci pubblicati (ID announcement1, announcement2...)
-│   └── offers.json                # Trattative (ID offer1, offer2...)
-│
-├── public/                        # Risorse statiche
-│   ├── css/style.css              # Foglio di stile personalizzato
-│   ├── js/client.js               # Tutto il codice JavaScript client unificato
-│   ├── images/placeholder.png     # Immagine di fallback
-│   └── uploads/                   # Immagini caricate per gli annunci
-│
-└── views/                         # Pagine HTML responsive
-    ├── home.html                  # Bacheca annunci attivi
-    ├── login.html                 # Accesso
-    ├── register.html              # Registrazione (esclusiva per il Piemonte)
-    ├── offers.html                # Centro trattative (Ricevute / Inviate)
-    └── my-announcements.html     # Gestione dei propri annunci
-```
+Piattaforma didattica web per la compravendita regionale esclusiva per il **Piemonte**, trasformata in un **mercato ad asta in tempo reale**.
 
 ---
 
-## 2. Punti Chiave e Regole Applicative
+## 1. Funzionalità Principali
 
-1. **Registrazione Riservata al Piemonte**: sia nel browser che sul server è verificato che la regione sia esclusivamente `"Piemonte"`.
-2. **ID Progressivi Semplici**: `user1`, `user2`, `announcement1`, `offer1`...
-3. **Autenticazione senza Cookie**: i dati dell'utente loggato risiedono in `localStorage` nel browser e vengono comunicati al server tramite l'header HTTP `x-user-id` e la query string WebSocket (`/ws?userId=user1`).
-4. **Regola di Esclusività delle Offerte**: il venditore può accettare **una sola offerta** per annuncio. All'accettazione, l'annuncio passa a `sold` e tutte le altre offerte aperte per quell'annuncio vengono automaticamente annullate (`cancelled`).
-5. **Home Page Pulita**: gli annunci venduti scompaiono istantaneamente dalla bacheca principale.
-6. **Nessun Popup Invasivo**: le notifiche a comparsa sono state eliminate, mantenendo conferme chiare e dialog standard.
-7. **Footer Minimale**: in tutte le pagine compare esclusivamente `Piemarket 2026`.
+- **Mercato ad Asta con Timer**:
+  - Ogni utente piemontese può creare un'asta impostando titolo, descrizione, immagine, prezzo base e **durata del timer** (in minuti);
+  - Il tempo rimanente scorre con un **conto alla rovescia in diretta** su ciascuna card dell'asta;
+- **Rilanci Rapidi e Offerte Personalizzate**:
+  - Gli utenti possono rilanciare immediatamente con i pulsanti rapidi **+1 €** e **+5 €**, oppure inserire una cifra libera superiore all'offerta corrente;
+  - Il proprietario dell'asta non può fare offerte sui propri oggetti;
+- **Sincronizzazione Live via WebSocket (`ws`)**:
+  - Ogni volta che un utente rilancia, la cifra e il miglior offerente si aggiornano istantaneamente sugli schermi di tutti gli altri utenti connessi senza ricaricare la pagina;
+  - Alla scadenza del timer, l'asta si chiude automaticamente proclamando il vincitore;
+- **Interfaccia Semplificata**:
+  - Rimossa la barra di ricerca e i filtri prezzo per focalizzare la bacheca sulle aste attive;
+  - Nessuna notifica invasiva a comparsa;
+  - Footer pulito con la dicitura `Piemarket 2026`;
+- **Architettura Didattica Semplice**:
+  - Tutto il backend unificato in [server.js](file:///home/mattia/Documenti/TPSIT/server.js);
+  - Tutto il client unificato in [public/js/client.js](file:///home/mattia/Documenti/TPSIT/public/js/client.js);
+  - Autenticazione con `localStorage` e header `x-user-id` (senza complessità di cookie o hashing);
+  - Persistenza su file JSON in `data/users.json` e `data/announcements.json`.
 
 ---
 
-## 3. Installazione e Avvio
+## 2. Installazione e Avvio
 
-1. Installazione dipendenze minime:
+1. Installazione dipendenze:
    ```bash
    npm install
    ```
 
-2. Avvio del server:
+2. Avvio dell'applicazione:
    ```bash
    npm start
    ```
    Raggiungibile all'indirizzo: `http://localhost:3000`.
 
-3. Verifica automatizzata:
+3. Esecuzione dei test automatici:
    ```bash
    npm test
    ```

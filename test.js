@@ -1,13 +1,12 @@
 // ============================================================================
-// TEST AUTOMATIZZATO - PIEMARKET
-// Verifica scenari, esclusività accettazione offerte (max 1 offerta accettata)
-// e scomparsa degli annunci venduti dalla home page
+// TEST AUTOMATIZZATO — PIEMARKET (MERCATO AD ASTA)
+// Verifica aste, timer, rilanci rapidi (+1, +5), vincolo Piemonte e WebSocket
 // ============================================================================
 
 const { WebSocket } = require('ws');
-const { server } = require('./server');
+const { server, expiryInterval } = require('./server');
 
-const PORT = 3065;
+const PORT = 3070;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 function sleep(ms) {
@@ -57,63 +56,77 @@ async function request(urlPath, options = {}) {
 }
 
 async function runTests() {
-    console.log('--- AVVIO TEST DI CONVALIDA REGOLA SINGOLA OFFERTA E HOME SENZA VENDUTI ---');
+    console.log('--- AVVIO TEST MERCATO AD ASTA PIEMARKET ---');
 
-    // Reset dati per test pulito
+    // Reset completo file dati
     const fs = require('fs');
     fs.writeFileSync('./data/users.json', JSON.stringify([], null, 2), 'utf-8');
     fs.writeFileSync('./data/announcements.json', JSON.stringify([], null, 2), 'utf-8');
-    fs.writeFileSync('./data/offers.json', JSON.stringify([], null, 2), 'utf-8');
 
     await new Promise((resolve) => {
         server.listen(PORT, resolve);
     });
-    console.log(`Server avviato su porta ${PORT}`);
+    console.log(`Server d'asta avviato su porta ${PORT}`);
 
     try {
-        // Registrazione Mario (venditore -> user1)
+        // SCENARIO 1: Vincolo Piemonte
+        console.log('\n[Scenario 1] Verifica vincolo regionale (rifiuto Lombardia)...');
+        const resRegLombardia = await request('/api/register', {
+            method: 'POST',
+            body: { username: 'milanese', email: 'milanese@lombardia.it', password: 'password123', confirmPassword: 'password123', region: 'Lombardia' }
+        });
+        if (resRegLombardia.status === 400 && resRegLombardia.json.error.includes('Piemarket è riservato ai residenti in Piemonte')) {
+            console.log(' PASSED: Registrazione extra-regionale correttamente respinta.');
+        } else {
+            throw new Error('FAILED: Registrazione Lombardia permessa!');
+        }
+
+        // SCENARIO 2: Registrazione Mario (venditore) e due offerenti (Luca e Giuseppe)
+        console.log('\n[Scenario 2] Registrazione utenti piemontesi con ID progressivi...');
         const resMario = await request('/api/register', {
             method: 'POST',
-            body: { username: 'mario_rossi', email: 'mario@piemonte.it', password: 'password123', confirmPassword: 'password123', region: 'Piemonte' }
+            body: { username: 'mario_venditore', email: 'mario@piemonte.it', password: 'password123', confirmPassword: 'password123', region: 'Piemonte' }
         });
         const marioId = resMario.json.user.id;
 
-        // Registrazione Luca (primo acquirente -> user2)
         const resLuca = await request('/api/register', {
             method: 'POST',
-            body: { username: 'luca_bianchi', email: 'luca@piemonte.it', password: 'password123', confirmPassword: 'password123', region: 'Piemonte' }
+            body: { username: 'luca_offerente', email: 'luca@piemonte.it', password: 'password123', confirmPassword: 'password123', region: 'Piemonte' }
         });
         const lucaId = resLuca.json.user.id;
 
-        // Registrazione Giuseppe (secondo acquirente -> user3)
         const resGiuseppe = await request('/api/register', {
             method: 'POST',
-            body: { username: 'giuseppe_verdi', email: 'giuseppe@piemonte.it', password: 'password123', confirmPassword: 'password123', region: 'Piemonte' }
+            body: { username: 'giuseppe_offerente', email: 'giuseppe@piemonte.it', password: 'password123', confirmPassword: 'password123', region: 'Piemonte' }
         });
         const giuseppeId = resGiuseppe.json.user.id;
 
-        console.log(` PASSED: Utenti registrati: ${marioId}, ${lucaId}, ${giuseppeId}`);
+        console.log(` PASSED: Utenti creati: ${marioId}, ${lucaId}, ${giuseppeId}`);
 
-        // Connessione WebSocket di Giuseppe
-        const wsGiuseppe = new WebSocket(`ws://127.0.0.1:${PORT}/ws?userId=${giuseppeId}`);
-        const wsMessagesGiuseppe = [];
+        // Connessione WebSocket di Luca
+        const wsLuca = new WebSocket(`ws://127.0.0.1:${PORT}/ws?userId=${lucaId}`);
+        const wsMessagesLuca = [];
         await new Promise((resolve, reject) => {
-            wsGiuseppe.on('open', resolve);
-            wsGiuseppe.on('error', reject);
-            wsGiuseppe.on('message', (d) => wsMessagesGiuseppe.push(JSON.parse(d.toString())));
+            wsLuca.on('open', resolve);
+            wsLuca.on('error', reject);
+            wsLuca.on('message', d => wsMessagesLuca.push(JSON.parse(d.toString())));
         });
+        console.log(' PASSED: Connessione WebSocket attiva per Luca.');
 
-        // Mario pubblica announcement1
-        const boundary = '----WebKitFormBoundarySingleOfferTest';
+        // SCENARIO 3: Creazione asta con timer
+        console.log('\n[Scenario 3] Mario crea un\'asta con prezzo base di 50 € e durata 1 minuto...');
+        const boundary = '----WebKitFormBoundaryAuctionTest';
         const multipartBody = 
             `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="title"\r\n\r\nBici da corsa\r\n` +
+            `Content-Disposition: form-data; name="title"\r\n\r\nOrologio da collezione\r\n` +
             `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="description"\r\n\r\nBici nuova mai usata.\r\n` +
+            `Content-Disposition: form-data; name="description"\r\n\r\nOrologio raro a carica manuale.\r\n` +
             `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="price"\r\n\r\n100\r\n` +
+            `Content-Disposition: form-data; name="price"\r\n\r\n50\r\n` +
             `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="image"; filename="bici.jpg"\r\n` +
+            `Content-Disposition: form-data; name="durationMinutes"\r\n\r\n1\r\n` +
+            `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="image"; filename="orologio.jpg"\r\n` +
             `Content-Type: image/jpeg\r\n\r\nfake-image-bytes\r\n` +
             `--${boundary}--\r\n`;
 
@@ -123,97 +136,102 @@ async function runTests() {
             headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
             body: multipartBody
         });
-        const announcementId = resPub.json.announcement.id;
-        console.log(` PASSED: Annuncio pubblicato: ${announcementId}`);
+        if (resPub.status !== 201) throw new Error('Creazione asta fallita');
+        const auctionId = resPub.json.announcement.id;
+        console.log(` PASSED: Asta creata: ${auctionId} con base: ${resPub.json.announcement.currentBid} € e scadenza calcolata.`);
 
-        // Verifica che l'annuncio compaia inizialmente nella home
-        const resHome1 = await request('/api/announcements');
-        if (resHome1.json.announcements.some(a => a.id === announcementId)) {
-            console.log(' PASSED: L\'annuncio attivo è presente nella bacheca iniziale.');
+        await sleep(150);
+        const wsNewAnn = wsMessagesLuca.find(m => m.type === 'NEW_ANNOUNCEMENT');
+        if (wsNewAnn && wsNewAnn.data.id === auctionId) {
+            console.log(' PASSED: Luca ha ricevuto in tempo reale la nuova asta via WebSocket!');
         } else {
-            throw new Error('Annuncio attivo non trovato in bacheca');
+            throw new Error('FAILED: Broadcast WebSocket nuova asta mancante.');
         }
 
-        // Offerta 1: Luca propone 80 €
-        const resOffer1 = await request('/api/offers', {
+        // SCENARIO 4: Il proprietario Mario NON può fare offerte sulla propria asta
+        console.log('\n[Scenario 4] Mario tenta di fare un\'offerta sulla propria asta...');
+        const resSelfBid = await request(`/api/announcements/${auctionId}/bid`, {
+            method: 'POST',
+            userId: marioId,
+            body: { amount: 60 }
+        });
+        if (resSelfBid.status === 400 && resSelfBid.json.error.includes('Non puoi fare offerte sulla tua stessa asta')) {
+            console.log(' PASSED: Auto-offerta del proprietario correttamente impedita.');
+        } else {
+            throw new Error('FAILED: Auto-offerta permessa!');
+        }
+
+        // SCENARIO 5: Luca effettua un rilancio di +1 € (da 50 a 51 €)
+        console.log('\n[Scenario 5] Luca rilancia di +1 € (offerta diventa 51 €)...');
+        const resBid1 = await request(`/api/announcements/${auctionId}/bid`, {
             method: 'POST',
             userId: lucaId,
-            body: { announcementId, amount: 80, message: 'Offro 80' }
+            body: { amount: 51 }
         });
-        const offer1Id = resOffer1.json.offer.id;
+        if (resBid1.status !== 200) throw new Error('Rilancio +1 fallito');
+        if (resBid1.json.announcement.currentBid === 51 && resBid1.json.announcement.highestBidderId === lucaId) {
+            console.log(` PASSED: Offerta attuale: ${resBid1.json.announcement.currentBid} € - Miglior offerente: Luca`);
+        } else {
+            throw new Error('FAILED: Rilancio +1 non aggiornato.');
+        }
 
-        // Offerta 2: Giuseppe propone 85 € per lo stesso annuncio
-        const resOffer2 = await request('/api/offers', {
+        // SCENARIO 6: Giuseppe effettua un rilancio di +5 € (da 51 a 56 €)
+        console.log('\n[Scenario 6] Giuseppe rilancia di +5 € (offerta diventa 56 €)...');
+        const resBid2 = await request(`/api/announcements/${auctionId}/bid`, {
             method: 'POST',
             userId: giuseppeId,
-            body: { announcementId, amount: 85, message: 'Offro 85' }
+            body: { amount: 56 }
         });
-        const offer2Id = resOffer2.json.offer.id;
-        console.log(` PASSED: Mario ha ricevuto due offerte concorrenti: ${offer1Id} e ${offer2Id}`);
-
-        // Mario accetta l'offerta 1 di Luca (80 €)
-        const resAccept1 = await request(`/api/offers/${offer1Id}/accept`, {
-            method: 'POST',
-            userId: marioId
-        });
-        if (resAccept1.status !== 200 || resAccept1.json.offer.status !== 'accepted') {
-            throw new Error('Accettazione prima offerta fallita');
-        }
-        console.log(` PASSED: Mario ha accettato l'offerta ${offer1Id}`);
-
-        // VERIFICA REGOLA LOGICA 1: Mario NON deve poter accettare l'offerta 2 di Giuseppe
-        const resAccept2 = await request(`/api/offers/${offer2Id}/accept`, {
-            method: 'POST',
-            userId: marioId
-        });
-        if (resAccept2.status === 400 && (resAccept2.json.error.includes('già stato venduto') || resAccept2.json.error.includes('non è più in corso'))) {
-            console.log(' PASSED: Il server impedisce correttamente di accettare una seconda offerta!');
+        if (resBid2.status !== 200) throw new Error('Rilancio +5 fallito');
+        if (resBid2.json.announcement.currentBid === 56 && resBid2.json.announcement.highestBidderId === giuseppeId) {
+            console.log(` PASSED: Offerta attuale: ${resBid2.json.announcement.currentBid} € - Miglior offerente: Giuseppe`);
         } else {
-            throw new Error(`FAILED: Il server ha permesso di accettare due offerte contemporaneamente! Status: ${resAccept2.status}`);
+            throw new Error('FAILED: Rilancio +5 non aggiornato.');
         }
 
-        // VERIFICA REGOLA LOGICA 2: L'annuncio venduto NON deve più comparire nella Home
-        const resHome2 = await request('/api/announcements');
-        const isPresentInHome = resHome2.json.announcements.some(a => a.id === announcementId);
-        if (!isPresentInHome) {
-            console.log(' PASSED: L\'annuncio venduto è scomparso dalla Home page!');
+        // SCENARIO 7: Luca effettua un'offerta libera di 70 €
+        console.log('\n[Scenario 7] Luca effettua un\'offerta libera personalizzata di 70 €...');
+        const resBid3 = await request(`/api/announcements/${auctionId}/bid`, {
+            method: 'POST',
+            userId: lucaId,
+            body: { amount: 70 }
+        });
+        if (resBid3.status !== 200) throw new Error('Offerta personalizzata fallita');
+        if (resBid3.json.announcement.currentBid === 70 && resBid3.json.announcement.highestBidderId === lucaId) {
+            console.log(` PASSED: Offerta attuale: ${resBid3.json.announcement.currentBid} € - Storico rilanci: ${resBid3.json.announcement.bids.length} puntate.`);
         } else {
-            throw new Error('FAILED: L\'annuncio venduto compare ancora nella Home page!');
+            throw new Error('FAILED: Offerta personalizzata non aggiornata.');
         }
 
-        // VERIFICA REGOLA LOGICA 3: Nessun utente può più fare offerte o controfferte sull'annuncio venduto
-        const resOfferNew = await request('/api/offers', {
+        // SCENARIO 8: Tentativo di offerta inferiore o uguale a 70 € (deve fallire)
+        console.log('\n[Scenario 8] Tentativo di offerta non valida (65 € o 70 €)...');
+        const resBadBid = await request(`/api/announcements/${auctionId}/bid`, {
             method: 'POST',
             userId: giuseppeId,
-            body: { announcementId, amount: 90, message: 'Nuovo tentativo' }
+            body: { amount: 65 }
         });
-        if (resOfferNew.status === 400 && resOfferNew.json.error.includes('già stato venduto')) {
-            console.log(' PASSED: Il server rifiuta nuove offerte sull\'annuncio già venduto.');
+        if (resBadBid.status === 400 && resBadBid.json.error.includes('superiore')) {
+            console.log(' PASSED: Offerta inferiore correttamente respinta.');
         } else {
-            throw new Error('FAILED: Nuova offerta accettata su annuncio già venduto!');
+            throw new Error('FAILED: Offerta inferiore permessa!');
         }
 
-        // VERIFICA REGOLA LOGICA 4: L'altra offerta (offer2) è stata automaticamente annullata
-        const resGiuseppeSent = await request('/api/offers/sent', { userId: giuseppeId });
-        const gOffer = resGiuseppeSent.json.offers.find(o => o.id === offer2Id);
-        if (gOffer && gOffer.status === 'cancelled') {
-            console.log(' PASSED: L\'offerta concorrente è passata automaticamente a stato "cancelled"!');
+        // SCENARIO 9: Verifica broadcast WebSocket dell'evento BID_PLACED
+        await sleep(150);
+        const wsBidMsg = wsMessagesLuca.filter(m => m.type === 'BID_PLACED');
+        if (wsBidMsg.length >= 3) {
+            console.log(` PASSED: Ricevuti tutti i ${wsBidMsg.length} aggiornamenti BID_PLACED in diretta via WebSocket!`);
         } else {
-            throw new Error('FAILED: L\'offerta concorrente non è stata annullata!');
+            throw new Error('FAILED: Eventi BID_PLACED via WebSocket mancanti.');
         }
 
-        await sleep(100);
-        const cancelWsMsg = wsMessagesGiuseppe.find(m => m.type === 'OFFER_CANCELLED');
-        if (cancelWsMsg) {
-            console.log(' PASSED: Giuseppe ha ricevuto l\'evento WebSocket di annullamento della propria offerta!');
-        }
-
-        wsGiuseppe.close();
+        wsLuca.close();
         console.log('\n======================================================');
-        console.log(' TUTTE LE NUOVE REGOLE E VERIFICHE SONO STATE SUPERATE!');
+        console.log(' TUTTI I TEST DEL MERCATO AD ASTA SUPERATI CON SUCCESSO!');
         console.log('======================================================\n');
 
     } finally {
+        clearInterval(expiryInterval);
         server.close();
     }
 }
