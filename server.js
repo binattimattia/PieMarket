@@ -1,103 +1,159 @@
-const http = require('http');
-const path = require('path');
-const fs = require('fs');
-const express = require('express');
-const multer = require('multer');
-const { Server } = require('ws');
+// --- 1. MODULI CORE E DI TERZE PARTI ---
+const http = require('http');           
+const path = require('path');          
+const fs = require('fs');               
+const express = require('express');     
+const multer = require('multer');       
+const { Server: ServerWebSocket } = require('ws'); 
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
-const USERS_FILE = 'users.json';
-const ANNOUNCEMENTS_FILE = 'announcements.json';
+// --- 2. CONFIGURAZIONE E COSTANTI ---
+const applicazione = express();
+const PORTA = process.env.PORT || 3000;
+const CARTELLA_DATI = path.join(__dirname, 'data');
+const FILE_UTENTI = 'users.json';
+const FILE_ANNUNCI = 'announcements.json';
 
-// --- PERSISTENZA FILE JSON ---
-async function readData(file) {
+// --- 3. GESTIONE DELLA PERSISTENZA DEI DATI (FILE JSON) ---
+
+/**
+ * Legge in modo asincrono un file JSON contenuto nella cartella 'data'.
+ * Se il file non esiste o è vuoto, restituisce un array vuoto per evitare crash.
+ */
+async function leggiDati(nomeFile) {
     try {
-        const content = await fs.promises.readFile(path.join(DATA_DIR, file), 'utf-8');
-        return JSON.parse(content);
+        const percorsoCompleto = path.join(CARTELLA_DATI, nomeFile);
+        const contenuto = await fs.promises.readFile(percorsoCompleto, 'utf-8');
+        return JSON.parse(contenuto);
     } catch {
         return [];
     }
 }
 
-async function writeData(file, data) {
-    await fs.promises.writeFile(path.join(DATA_DIR, file), JSON.stringify(data, null, 2), 'utf-8');
+/**
+ * Salva in modo asincrono i dati all'interno del file JSON specificato.
+ * Usa JSON.stringify con indentazione a 2 spazi per mantenere il file leggibile.
+ */
+async function scriviDati(nomeFile, dati) {
+    const percorsoCompleto = path.join(CARTELLA_DATI, nomeFile);
+    await fs.promises.writeFile(percorsoCompleto, JSON.stringify(dati, null, 2), 'utf-8');
 }
 
-// Genera ID progressivi semplici (es. user1, announcement1, bid1)
-function getNextId(list, prefix) {
-    let max = 0;
-    list.forEach(item => {
-        const num = parseInt(item.id.replace(prefix, ''), 10);
-        if (num > max) max = num;
-    });
-    return `${prefix}${max + 1}`;
-}
-
-// --- UPLOAD IMMAGINI (MULTER) ---
-const uploadDir = path.join(__dirname, 'public/uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir),
-    filename: (req, file, cb) => cb(null, `img_${Date.now()}${path.extname(file.originalname)}`)
-});
-const upload = multer({ storage });
-
-// --- MIDDLEWARE ---
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Autenticazione basata su ID utente (senza cookie o token complessi)
-async function requireAuth(req, res, next) {
-    const userId = req.headers['x-user-id'] || req.query.userId || req.body?.userId;
-    const users = await readData(USERS_FILE);
-    const user = users.find(u => u.id === userId);
-    if (!user) return res.status(401).json({ error: 'Accesso negato. Utente non autenticato.' });
-    req.user = user;
-    next();
-}
-
-// Helper per associare il nome del venditore all'asta
-function enrich(item, users) {
-    const seller = users.find(u => u.id === item.userId);
-    return { ...item, sellerUsername: seller ? seller.username : 'Venditore' };
-}
-
-// Verifica e aggiorna lo stato delle aste scadute
-async function checkExpiredAuctions() {
-    const list = await readData(ANNOUNCEMENTS_FILE);
-    let changed = false;
-    const now = Date.now();
-    list.forEach(a => {
-        if (a.status === 'active' && new Date(a.expiresAt).getTime() <= now) {
-            a.status = 'ended';
-            changed = true;
-            broadcast('AUCTION_ENDED', a);
+/**
+ * Genera un identificatore progressivo lineare e intuitivo (es. user1, user2, announcement1).
+ * Rimuove il prefisso testuale per isolare il numero, calcola il massimo attuale e aggiunge 1.
+ */
+function generaNuovoId(lista, prefisso) {
+    let numeroMassimo = 0;
+    lista.forEach(elemento => {
+        if (elemento && elemento.id) {
+            const numeroEstratto = parseInt(elemento.id.replace(prefisso, ''), 10);
+            if (!isNaN(numeroEstratto) && numeroEstratto > numeroMassimo) {
+                numeroMassimo = numeroEstratto;
+            }
         }
     });
-    if (changed) await writeData(ANNOUNCEMENTS_FILE, list);
-    return list;
+    return `${prefisso}${numeroMassimo + 1}`;
 }
 
-// --- ROTTE PAGINE HTML ---
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'views/home.html')));
-app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'views/login.html')));
-app.get('/register', (req, res) => res.sendFile(path.join(__dirname, 'views/register.html')));
-app.get('/my-announcements', (req, res) => res.sendFile(path.join(__dirname, 'views/my-announcements.html')));
+// --- 4. GESTIONE UPLOAD IMMAGINI (MULTER) ---
+const cartellaUpload = path.join(__dirname, 'public/uploads');
+if (!fs.existsSync(cartellaUpload)) {
+    fs.mkdirSync(cartellaUpload, { recursive: true });
+}
 
-// --- API AUTENTICAZIONE ---
-app.post('/api/register', async (req, res) => {
+// Configura il salvataggio dei file su disco con nome univoco basato sul timestamp
+const configurazioneArchiviazione = multer.diskStorage({
+    destination: (richiesta, file, callback) => callback(null, cartellaUpload),
+    filename: (richiesta, file, callback) => {
+        const estensione = path.extname(file.originalname);
+        callback(null, `img_${Date.now()}${estensione}`);
+    }
+});
+const gestoreUpload = multer({ storage: configurazioneArchiviazione });
+
+// --- 5. MIDDLEWARE DI BASE E AUTENTICAZIONE ---
+applicazione.use(express.json());                          // Decodifica automatica dei body in formato JSON
+applicazione.use(express.urlencoded({ extended: true }));  // Decodifica dei dati inviati tramite form HTML
+applicazione.use(express.static(path.join(__dirname, 'public'))); // Distribuzione dei file statici (HTML, CSS, JS client, immagini)
+
+/**
+ * Middleware di autenticazione per le rotte protette.
+ * Verifica la presenza dell'ID utente tramite header HTTP 'x-user-id'.
+ * Se l'ID corrisponde a un utente valido nel database JSON, permette l'accesso salvando l'utente in 'req.user'.
+ */
+async function richiediAutenticazione(richiesta, risposta, prossimo) {
+    const idUtente = richiesta.headers['x-user-id'] || richiesta.query.userId || richiesta.body?.userId;
+    const utenti = await leggiDati(FILE_UTENTI);
+    const utenteTrovato = utenti.find(u => u.id === idUtente);
+
+    if (!utenteTrovato) {
+        return risposta.status(401).json({ error: 'Accesso negato. Utente non autenticato.' });
+    }
+
+    richiesta.user = utenteTrovato;
+    prossimo(); // Passa al gestore della rotta successiva
+}
+
+// --- 6. FUNZIONI DI SUPPORTO PER LE ASTE ---
+
+/**
+ * Aggiunge a ciascun annuncio il nome utente del venditore (sellerUsername),
+ * facilitando la visualizzazione lato frontend senza dover inviare dati sensibili.
+ */
+function arricchisciAnnuncio(annuncio, utenti) {
+    const venditore = utenti.find(u => u.id === annuncio.userId);
+    return { ...annuncio, sellerUsername: venditore ? venditore.username : 'Venditore' };
+}
+
+/**
+ * Scansiona tutte le aste memorizzate. Se un'asta attiva ha superato la data di scadenza (expiresAt),
+ * imposta lo stato a 'ended' (conclusa) e avvisa istantaneamente tutti i client tramite WebSocket.
+ */
+async function controllaAsteScadute() {
+    const listaAste = await leggiDati(FILE_ANNUNCI);
+    let modificato = false;
+    const oraAttuale = Date.now();
+
+    listaAste.forEach(asta => {
+        if (asta.status === 'active' && new Date(asta.expiresAt).getTime() <= oraAttuale) {
+            asta.status = 'ended';
+            modificato = true;
+            inviaATutti('AUCTION_ENDED', asta);
+        }
+    });
+
+    if (modificato) {
+        await scriviDati(FILE_ANNUNCI, listaAste);
+    }
+    return listaAste;
+}
+
+// --- 7. ROTTE HTML PER LA NAVIGAZIONE ---
+applicazione.get('/', (req, res) => res.sendFile(path.join(__dirname, 'views/home.html')));
+applicazione.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'views/login.html')));
+applicazione.get('/register', (req, res) => res.sendFile(path.join(__dirname, 'views/register.html')));
+applicazione.get('/my-announcements', (req, res) => res.sendFile(path.join(__dirname, 'views/my-announcements.html')));
+
+// --- 8. ROTTE API: AUTENTICAZIONE UTENTI ---
+
+// Registrazione di un nuovo utente con VINCOLO REGIONALE PIEMONTE
+applicazione.post('/api/register', async (req, res) => {
     try {
         const { username, email, password, confirmPassword, region } = req.body;
+
+        // 1. Validazione campi obbligatori
         if (!username || !email || !password || !confirmPassword || !region) {
             return res.status(400).json({ error: 'Tutti i campi sono obbligatori.' });
         }
+
+        // 2. Controllo fondamentale: la regione DEVE essere Piemonte
         if (String(region).trim() !== 'Piemonte') {
-            return res.status(400).json({ error: 'Piemarket è riservato ai residenti in Piemonte. Al momento non è possibile registrarsi da un\'altra regione.' });
+            return res.status(400).json({
+                error: 'Piemarket è riservato ai residenti in Piemonte. Al momento non è possibile registrarsi da un\'altra regione.'
+            });
         }
+
+        // 3. Verifica corrispondenza e lunghezza minima password
         if (password !== confirmPassword) {
             return res.status(400).json({ error: 'Le password non coincidono.' });
         }
@@ -105,217 +161,278 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'La password deve avere almeno 6 caratteri.' });
         }
 
-        const users = await readData(USERS_FILE);
-        if (users.some(u => u.email.toLowerCase() === email.trim().toLowerCase())) {
+        // 4. Verifica unicità dell'indirizzo email
+        const utenti = await leggiDati(FILE_UTENTI);
+        const emailGiaPresente = utenti.some(u => u.email.toLowerCase() === email.trim().toLowerCase());
+        if (emailGiaPresente) {
             return res.status(400).json({ error: 'Indirizzo email già registrato.' });
         }
 
-        const newUser = {
-            id: getNextId(users, 'user'),
+        // 5. Creazione utente con ID progressivo (user1, user2...)
+        const nuovoUtente = {
+            id: generaNuovoId(utenti, 'user'),
             username: username.trim(),
             email: email.trim().toLowerCase(),
-            password,
+            password: password, // In chiaro per semplicità didattica (scopo scolastico)
             region: region.trim(),
             createdAt: new Date().toISOString()
         };
-        users.push(newUser);
-        await writeData(USERS_FILE, users);
 
-        const { password: _, ...safeUser } = newUser;
-        res.status(201).json({ success: true, user: safeUser });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        utenti.push(nuovoUtente);
+        await scriviDati(FILE_UTENTI, utenti);
+
+        // Risposta senza esporre la password
+        const { password: _, ...utenteSicuro } = nuovoUtente;
+        res.status(201).json({ success: true, user: utenteSicuro });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-app.post('/api/login', async (req, res) => {
+// Login con verifica di email e password
+applicazione.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const users = await readData(USERS_FILE);
-        const user = users.find(u => u.email.toLowerCase() === (email || '').trim().toLowerCase());
-        if (!user || user.password !== password) {
+        const utenti = await leggiDati(FILE_UTENTI);
+        const utente = utenti.find(u => u.email.toLowerCase() === (email || '').trim().toLowerCase());
+
+        if (!utente || utente.password !== password) {
             return res.status(401).json({ error: 'Credenziali non valide. Verifica email e password.' });
         }
-        const { password: _, ...safeUser } = user;
-        res.json({ success: true, user: safeUser });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+
+        const { password: _, ...utenteSicuro } = utente;
+        res.json({ success: true, user: utenteSicuro });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-app.post('/api/logout', (req, res) => res.json({ success: true }));
+// Logout (semplice conferma, il client pulirà il suo localStorage)
+applicazione.post('/api/logout', (req, res) => res.json({ success: true }));
 
-app.get('/api/me', requireAuth, (req, res) => {
-    const { password: _, ...safeUser } = req.user;
-    res.json({ success: true, user: safeUser });
+// Informazioni sul profilo dell'utente attualmente autenticato
+applicazione.get('/api/me', richiediAutenticazione, (req, res) => {
+    const { password: _, ...utenteSicuro } = req.user;
+    res.json({ success: true, user: utenteSicuro });
 });
 
-// --- API ASTE ---
-app.get('/api/announcements', async (req, res) => {
+// --- 9. ROTTE API: GESTIONE ASTE E RILANCI ---
+
+// Ottiene tutte le aste (ordinate dalla più recente)
+applicazione.get('/api/announcements', async (req, res) => {
     try {
-        const list = await checkExpiredAuctions();
-        const users = await readData(USERS_FILE);
-        list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        res.json({ success: true, announcements: list.map(a => enrich(a, users)) });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        const aste = await controllaAsteScadute();
+        const utenti = await leggiDati(FILE_UTENTI);
+        aste.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        res.json({ success: true, announcements: aste.map(a => arricchisciAnnuncio(a, utenti)) });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-app.get('/api/announcements/my', requireAuth, async (req, res) => {
+// Ottiene solo le aste create dall'utente attualmente loggato ("Le mie aste")
+applicazione.get('/api/announcements/my', richiediAutenticazione, async (req, res) => {
     try {
-        const list = await checkExpiredAuctions();
-        const users = await readData(USERS_FILE);
-        const mine = list.filter(a => a.userId === req.user.id && a.status !== 'deleted');
-        mine.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        res.json({ success: true, announcements: mine.map(a => enrich(a, users)) });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        const aste = await controllaAsteScadute();
+        const utenti = await leggiDati(FILE_UTENTI);
+        const mieAste = aste.filter(a => a.userId === req.user.id && a.status !== 'deleted');
+        mieAste.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        res.json({ success: true, announcements: mieAste.map(a => arricchisciAnnuncio(a, utenti)) });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-app.get('/api/announcements/:id', async (req, res) => {
+// Dettaglio di una singola asta tramite ID
+applicazione.get('/api/announcements/:id', async (req, res) => {
     try {
-        const list = await checkExpiredAuctions();
-        const item = list.find(a => a.id === req.params.id && a.status !== 'deleted');
-        if (!item) return res.status(404).json({ error: 'Asta non trovata.' });
-        const users = await readData(USERS_FILE);
-        res.json({ success: true, announcement: enrich(item, users) });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        const aste = await controllaAsteScadute();
+        const asta = aste.find(a => a.id === req.params.id && a.status !== 'deleted');
+        if (!asta) return res.status(404).json({ error: 'Asta non trovata.' });
+
+        const utenti = await leggiDati(FILE_UTENTI);
+        res.json({ success: true, announcement: arricchisciAnnuncio(asta, utenti) });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-app.post('/api/announcements', requireAuth, upload.single('image'), async (req, res) => {
+// Creazione e pubblicazione di una nuova asta con timer e caricamento immagine
+applicazione.post('/api/announcements', richiediAutenticazione, gestoreUpload.single('image'), async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ error: 'L\'immagine dell\'asta è obbligatoria.' });
+        if (!req.file) {
+            return res.status(400).json({ error: 'L\'immagine dell\'asta è obbligatoria.' });
+        }
+
         const { title, description, price, durationMinutes } = req.body;
-        const numPrice = Number(price);
-        const numDuration = Math.max(1, parseInt(durationMinutes, 10) || 5);
+        const prezzoIniziale = Number(price);
+        const minutiDurata = Math.max(1, parseInt(durationMinutes, 10) || 5); // Default 5 minuti, minimo 1
 
-        if (!title || !description || isNaN(numPrice) || numPrice < 0) {
+        if (!title || !description || isNaN(prezzoIniziale) || prezzoIniziale < 0) {
             return res.status(400).json({ error: 'Dati asta non validi.' });
         }
 
-        const list = await readData(ANNOUNCEMENTS_FILE);
-        const now = new Date();
-        const newAuction = {
-            id: getNextId(list, 'announcement'),
+        const aste = await leggiDati(FILE_ANNUNCI);
+        const adesso = new Date();
+        // Calcolo della data di scadenza esatta: ora attuale + durata in minuti
+        const dataScadenza = new Date(adesso.getTime() + minutiDurata * 60 * 1000).toISOString();
+
+        const nuovaAsta = {
+            id: generaNuovoId(aste, 'announcement'),
             userId: req.user.id,
             title: title.trim(),
             description: description.trim(),
-            startingPrice: numPrice,
-            currentBid: numPrice,
+            startingPrice: prezzoIniziale,
+            currentBid: prezzoIniziale, // All'inizio l'offerta minima corrente è il prezzo di partenza
             highestBidderId: null,
             highestBidderUsername: null,
             image: `/uploads/${req.file.filename}`,
-            durationMinutes: numDuration,
-            expiresAt: new Date(now.getTime() + numDuration * 60 * 1000).toISOString(),
+            durationMinutes: minutiDurata,
+            expiresAt: dataScadenza,
             status: 'active',
-            bids: [],
-            createdAt: now.toISOString(),
-            updatedAt: now.toISOString()
+            bids: [], // Storico dei rilanci
+            createdAt: adesso.toISOString(),
+            updatedAt: adesso.toISOString()
         };
 
-        list.push(newAuction);
-        await writeData(ANNOUNCEMENTS_FILE, list);
+        aste.push(nuovaAsta);
+        await scriviDati(FILE_ANNUNCI, aste);
 
-        const users = await readData(USERS_FILE);
-        const enriched = enrich(newAuction, users);
-        broadcast('NEW_ANNOUNCEMENT', enriched);
-        res.status(201).json({ success: true, announcement: enriched });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        const utenti = await leggiDati(FILE_UTENTI);
+        const astaArricchita = arricchisciAnnuncio(nuovaAsta, utenti);
+
+        // Notifica in tempo reale tutti i client connessi via WebSocket
+        inviaATutti('NEW_ANNOUNCEMENT', astaArricchita);
+        res.status(201).json({ success: true, announcement: astaArricchita });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-app.post('/api/announcements/:id/bid', requireAuth, async (req, res) => {
+// Effettua un rilancio (offerta) su un'asta
+applicazione.post('/api/announcements/:id/bid', richiediAutenticazione, async (req, res) => {
     try {
-        const amount = Number(req.body.amount);
-        if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'Importo offerta non valido.' });
+        const importoOfferta = Number(req.body.amount);
+        if (isNaN(importoOfferta) || importoOfferta <= 0) {
+            return res.status(400).json({ error: 'Importo offerta non valido.' });
+        }
 
-        const list = await readData(ANNOUNCEMENTS_FILE);
-        const auction = list.find(a => a.id === req.params.id && a.status !== 'deleted');
-        if (!auction) return res.status(404).json({ error: 'Asta non trovata.' });
+        const aste = await leggiDati(FILE_ANNUNCI);
+        const asta = aste.find(a => a.id === req.params.id && a.status !== 'deleted');
+        if (!asta) return res.status(404).json({ error: 'Asta non trovata.' });
 
-        if (auction.userId === req.user.id) {
+        // Regola 1: il proprietario dell'asta non può fare offerte sulla propria merce
+        if (asta.userId === req.user.id) {
             return res.status(400).json({ error: 'Non puoi fare offerte sulla tua stessa asta.' });
         }
 
-        if (auction.status !== 'active' || new Date(auction.expiresAt).getTime() <= Date.now()) {
-            auction.status = 'ended';
-            await writeData(ANNOUNCEMENTS_FILE, list);
-            broadcast('AUCTION_ENDED', auction);
+        // Regola 2: verifica che l'asta non sia già terminata o scaduta
+        if (asta.status !== 'active' || new Date(asta.expiresAt).getTime() <= Date.now()) {
+            asta.status = 'ended';
+            await scriviDati(FILE_ANNUNCI, aste);
+            inviaATutti('AUCTION_ENDED', asta);
             return res.status(400).json({ error: 'L\'asta è terminata.' });
         }
 
-        if (amount <= auction.currentBid) {
-            return res.status(400).json({ error: `L'offerta deve essere superiore all'offerta attuale (${auction.currentBid} €).` });
+        // Regola 3: l'offerta deve essere strettamente maggiore dell'offerta corrente
+        if (importoOfferta <= asta.currentBid) {
+            return res.status(400).json({
+                error: `L'offerta deve essere superiore all'offerta attuale (${asta.currentBid} €).`
+            });
         }
 
-        const now = new Date().toISOString();
-        auction.currentBid = amount;
-        auction.highestBidderId = req.user.id;
-        auction.highestBidderUsername = req.user.username;
-        auction.updatedAt = now;
-        auction.bids.push({
-            id: `bid${auction.bids.length + 1}`,
+        // Aggiorna lo stato dell'asta con la nuova puntata vincente
+        const dataRilancio = new Date().toISOString();
+        asta.currentBid = importoOfferta;
+        asta.highestBidderId = req.user.id;
+        asta.highestBidderUsername = req.user.username;
+        asta.updatedAt = dataRilancio;
+
+        // Inserisce il rilancio nella cronologia dell'asta
+        asta.bids.push({
+            id: `bid${asta.bids.length + 1}`,
             userId: req.user.id,
             username: req.user.username,
-            amount,
-            createdAt: now
+            amount: importoOfferta,
+            createdAt: dataRilancio
         });
 
-        await writeData(ANNOUNCEMENTS_FILE, list);
-        const users = await readData(USERS_FILE);
-        const enriched = enrich(auction, users);
-        broadcast('BID_PLACED', enriched);
-        res.json({ success: true, announcement: enriched });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        await scriviDati(FILE_ANNUNCI, aste);
+
+        const utenti = await leggiDati(FILE_UTENTI);
+        const astaArricchita = arricchisciAnnuncio(asta, utenti);
+
+        // Notifica in tempo reale del rilancio a tutti i browser connessi
+        inviaATutti('BID_PLACED', astaArricchita);
+        res.json({ success: true, announcement: astaArricchita });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-app.delete('/api/announcements/:id', requireAuth, async (req, res) => {
+// Eliminazione/Annullamento di un'asta da parte del proprietario
+applicazione.delete('/api/announcements/:id', richiediAutenticazione, async (req, res) => {
     try {
-        const list = await readData(ANNOUNCEMENTS_FILE);
-        const item = list.find(a => a.id === req.params.id);
-        if (!item) return res.status(404).json({ error: 'Asta non trovata.' });
-        if (item.userId !== req.user.id) return res.status(403).json({ error: 'Non autorizzato.' });
+        const aste = await leggiDati(FILE_ANNUNCI);
+        const asta = aste.find(a => a.id === req.params.id);
+        if (!asta) return res.status(404).json({ error: 'Asta non trovata.' });
+        if (asta.userId !== req.user.id) return res.status(403).json({ error: 'Non autorizzato.' });
 
-        item.status = 'deleted';
-        await writeData(ANNOUNCEMENTS_FILE, list);
-        broadcast('ANNOUNCEMENT_REMOVED', { id: item.id });
+        asta.status = 'deleted';
+        await scriviDati(FILE_ANNUNCI, aste);
+
+        // Avvisa i client di rimuovere la card dell'asta
+        inviaATutti('ANNOUNCEMENT_REMOVED', { id: asta.id });
         res.json({ success: true, message: 'Asta rimossa.' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+    } catch (errore) {
+        res.status(500).json({ error: errore.message });
     }
 });
 
-// --- SERVER HTTP & WEBSOCKET ---
-const server = http.createServer(app);
-const wsServer = new Server({ server, path: '/ws' });
+// --- 10. SERVER HTTP E WEBSOCKET NATIVO (ws) ---
+const serverHttp = http.createServer(applicazione);
+const serverWs = new ServerWebSocket({ server: serverHttp, path: '/ws' });
 
-wsServer.on('connection', (ws, req) => {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    ws.userId = url.searchParams.get('userId') || 'anon';
-    console.log(`[WebSocket] Connesso: ${ws.userId}`);
-    ws.on('close', () => console.log(`[WebSocket] Chiuso: ${ws.userId}`));
+// Gestione connessioni dei client al canale WebSocket
+serverWs.on('connection', (clientWs, richiestaHttp) => {
+    const urlRichiesta = new URL(richiestaHttp.url, `http://${richiestaHttp.headers.host || 'localhost'}`);
+    clientWs.userId = urlRichiesta.searchParams.get('userId') || 'anon';
+    console.log(`[WebSocket] Connesso: ${clientWs.userId}`);
+
+    clientWs.on('close', () => {
+        console.log(`[WebSocket] Chiuso: ${clientWs.userId}`);
+    });
 });
 
-function broadcast(type, data = {}) {
-    const msg = JSON.stringify({ type, data });
-    wsServer.clients.forEach(c => {
-        if (c.readyState === 1) c.send(msg);
+/**
+ * Trasmette un messaggio a tutti i client WebSocket attualmente collegati.
+ */
+function inviaATutti(tipo, dati = {}) {
+    const messaggioSerializzato = JSON.stringify({ type: tipo, data: dati });
+    serverWs.clients.forEach(client => {
+        // readyState === 1 indica che la connessione è aperta e pronta all'invio
+        if (client.readyState === 1) {
+            client.send(messaggioSerializzato);
+        }
     });
 }
 
-const expiryInterval = setInterval(checkExpiredAuctions, 3000);
+// Timer di background: controlla ogni 3 secondi se ci sono aste scadute da chiudere
+const intervalloControlloScadenze = setInterval(controllaAsteScadute, 3000);
 
+// Avvio del server se eseguito come script principale
 if (require.main === module) {
-    server.listen(PORT, () => {
-        console.log(`Piemarket (Aste) avviato su http://localhost:${PORT}`);
+    serverHttp.listen(PORTA, () => {
+        console.log(`Piemarket avviato su http://localhost:${PORTA}`);
     });
 }
 
-module.exports = { app, server, expiryInterval };
+// Esportazioni per i test automatizzati (mantiene compatibilità con nomi inglesi e italiani)
+module.exports = {
+    app: applicazione,
+    server: serverHttp,
+    expiryInterval: intervalloControlloScadenze,
+    applicazione,
+    serverHttp,
+    intervalloControlloScadenze
+};

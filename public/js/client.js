@@ -1,467 +1,608 @@
-// ============================================================================
-// PIEMARKET — Client JavaScript Unificato (Aste in Tempo Reale)
-// ============================================================================
-
 (function () {
-    const STORAGE_KEY = 'piemarket_user';
+    // Chiave usata per memorizzare la sessione utente nel localStorage del browser
+    const CHIAVE_MEMORIA_LOCALE = 'piemarket_user';
 
-    // --- GESTIONE UTENTE E RICHIESTE HTTP ---
-    function getCurrentUser() {
-        try { return JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch { return null; }
+    // --- 1. GESTIONE STATO UTENTE E CHIAMATE HTTP ---
+
+    /**
+     * Recupera l'oggetto dell'utente attualmente autenticato dal localStorage.
+     */
+    function ottieniUtenteCorrente() {
+        try {
+            return JSON.parse(localStorage.getItem(CHIAVE_MEMORIA_LOCALE));
+        } catch {
+            return null;
+        }
     }
-    function setCurrentUser(user) { localStorage.setItem(STORAGE_KEY, JSON.stringify(user)); }
-    function clearCurrentUser() { localStorage.removeItem(STORAGE_KEY); }
 
-    function authFetch(url, options = {}) {
-        const user = getCurrentUser();
-        const headers = { ...(options.headers || {}) };
-        if (user && user.id) headers['x-user-id'] = user.id;
-        return fetch(url, { ...options, headers });
+    /**
+     * Salva l'oggetto utente nel localStorage per persistere la sessione.
+     */
+    function salvaUtenteCorrente(utente) {
+        localStorage.setItem(CHIAVE_MEMORIA_LOCALE, JSON.stringify(utente));
     }
 
-    // Calcolo tempo rimanente alla scadenza
-    function getRemainingTime(expiresAt) {
-        const diff = new Date(expiresAt).getTime() - Date.now();
-        if (diff <= 0) return { ended: true, text: 'Asta terminata', cssClass: 'bg-secondary' };
+    /**
+     * Rimuove i dati dell'utente dal localStorage (logout).
+     */
+    function rimuoviUtenteCorrente() {
+        localStorage.removeItem(CHIAVE_MEMORIA_LOCALE);
+    }
 
-        const sec = Math.floor(diff / 1000);
-        const m = Math.floor(sec / 60);
-        const s = sec % 60;
-        const timeStr = m > 59 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    /**
+     * Helper per eseguire richieste fetch aggiungendo l'header personalizzato 'x-user-id'.
+     * Questo sostituisce l'uso di cookie o token complessi per scopi didattici.
+     */
+    function richiestaAutenticata(url, opzioni = {}) {
+        const utente = ottieniUtenteCorrente();
+        const intestazioni = { ...(opzioni.headers || {}) };
+        if (utente && utente.id) {
+            intestazioni['x-user-id'] = utente.id;
+        }
+        return fetch(url, { ...opzioni, headers: intestazioni });
+    }
+
+    /**
+     * Calcola il tempo rimanente confrontando la data di scadenza con l'ora attuale.
+     */
+    function calcolaTempoRimanente(dataScadenzaIso) {
+        const differenzaMs = new Date(dataScadenzaIso).getTime() - Date.now();
+        if (differenzaMs <= 0) {
+            return { terminata: true, testo: 'Asta terminata', classeColore: 'bg-secondary' };
+        }
+
+        const secondiTotali = Math.floor(differenzaMs / 1000);
+        const minuti = Math.floor(secondiTotali / 60);
+        const secondi = secondiTotali % 60;
+
+        let testoFormattato = '';
+        if (minuti > 59) {
+            const ore = Math.floor(minuti / 60);
+            testoFormattato = `${ore}h ${minuti % 60}m`;
+        } else {
+            testoFormattato = `${String(minuti).padStart(2, '0')}:${String(secondi).padStart(2, '0')}`;
+        }
+
+        // Colori del badge in base all'urgenza: Rosso (<1 min), Giallo (<5 min), Blu (>5 min)
+        const classeColore = secondiTotali < 60
+            ? 'bg-danger'
+            : (secondiTotali < 300 ? 'bg-warning text-dark' : 'bg-primary');
+
         return {
-            ended: false,
-            text: `⏳ ${timeStr}`,
-            cssClass: sec < 60 ? 'bg-danger' : (sec < 300 ? 'bg-warning text-dark' : 'bg-primary')
+            terminata: false,
+            testo: `⏳ ${testoFormattato}`,
+            classeColore: classeColore
         };
     }
 
-    // --- WEBSOCKET NATIVO ---
-    const wsListeners = {};
-    function initWebSocket() {
-        const user = getCurrentUser();
-        if (!user) return;
-        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${location.host}/ws?userId=${user.id}`);
-        ws.onmessage = (e) => {
+    // --- 2. COMUNICAZIONE IN TEMPO REALE TRAMITE WEBSOCKET ---
+    const gestoriEventiWebSocket = {};
+
+    /**
+     * Inizializza la connessione WebSocket con il server Node.js.
+     * Si riconnette automaticamente ogni 3 secondi se la connessione viene interrotta.
+     */
+    function inizializzaWebSocket() {
+        const utente = ottieniUtenteCorrente();
+        if (!utente) return;
+
+        const protocollo = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const urlWs = `${protocollo}//${location.host}/ws?userId=${utente.id}`;
+        const ws = new WebSocket(urlWs);
+
+        // Quando il server invia un messaggio, decodifica il JSON e notifica le funzioni registrate
+        ws.onmessage = (evento) => {
             try {
-                const { type, data } = JSON.parse(e.data);
-                (wsListeners[type] || []).forEach(fn => fn(data));
+                const { type: tipo, data: dati } = JSON.parse(evento.data);
+                const funzioni = gestoriEventiWebSocket[tipo] || [];
+                funzioni.forEach(fn => fn(dati));
             } catch (_) {}
         };
-        ws.onclose = () => setTimeout(initWebSocket, 3000);
+
+        // Riconnessione automatica in caso di disconnessione
+        ws.onclose = () => setTimeout(inizializzaWebSocket, 3000);
     }
 
-    function onWsEvent(type, fn) {
-        if (!wsListeners[type]) wsListeners[type] = [];
-        wsListeners[type].push(fn);
+    /**
+     * Registra una funzione di callback da eseguire quando arriva uno specifico evento WebSocket.
+     */
+    function registraEventoWebSocket(tipo, callback) {
+        if (!gestoriEventiWebSocket[tipo]) gestoriEventiWebSocket[tipo] = [];
+        gestoriEventiWebSocket[tipo].push(callback);
     }
 
-    // --- CONTROLLO ACCESSO E NAVBAR ---
-    function handleNavigation() {
-        const user = getCurrentUser();
-        const isAuthPage = ['/login', '/register'].includes(location.pathname);
-        if (!user && !isAuthPage) return location.href = '/login';
-        if (user && isAuthPage) return location.href = '/';
+    // --- 3. CONTROLLO ACCESSO ALLE PAGINE E GESTIONE NAVBAR ---
+    function gestisciNavigazione() {
+        const utente = ottieniUtenteCorrente();
+        const rottaAttuale = location.pathname;
+        const ePaginaAutenticazione = ['/login', '/register'].includes(rottaAttuale);
 
-        const userDisplay = document.getElementById('nav-username-display');
-        if (user && userDisplay) userDisplay.textContent = user.username;
-
-        const logoutBtn = document.getElementById('btn-logout');
-        if (logoutBtn) logoutBtn.onclick = (e) => {
-            e.preventDefault();
-            clearCurrentUser();
+        // Se non autenticato e cerca di accedere a una pagina protetta -> reindirizza al login
+        if (!utente && !ePaginaAutenticazione) {
             location.href = '/login';
-        };
+            return;
+        }
+
+        // Se già autenticato e visita login o register -> reindirizza alla home
+        if (utente && ePaginaAutenticazione) {
+            location.href = '/';
+            return;
+        }
+
+        // Mostra il nome dell'utente loggato nella barra di navigazione
+        const spanNomeUtente = document.getElementById('nav-username-display');
+        if (utente && spanNomeUtente) {
+            spanNomeUtente.textContent = utente.username;
+        }
+
+        // Gestione del pulsante di logout
+        const bottoneLogout = document.getElementById('btn-logout');
+        if (bottoneLogout) {
+            bottoneLogout.onclick = (e) => {
+                e.preventDefault();
+                rimuoviUtenteCorrente();
+                location.href = '/login';
+            };
+        }
     }
 
-    // --- PAGINA LOGIN ---
-    function initLoginPage() {
-        const form = document.getElementById('form-login');
-        if (!form) return;
-        form.onsubmit = async (e) => {
-            e.preventDefault();
-            const alertBox = document.getElementById('alert-container');
-            try {
-                const res = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: form.email.value, password: form.password.value })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    setCurrentUser(data.user);
-                    location.href = '/';
-                } else {
-                    alertBox.innerHTML = `<div class="alert alert-danger py-2 small">${data.error}</div>`;
-                }
-            } catch {
-                alertBox.innerHTML = '<div class="alert alert-danger py-2 small">Errore di rete.</div>';
-            }
-        };
-    }
+    // --- 4. LOGICA DELLA PAGINA DI LOGIN (/login) ---
+    function inizializzaPaginaLogin() {
+        const moduloLogin = document.getElementById('form-login');
+        if (!moduloLogin) return;
 
-    // --- PAGINA REGISTRAZIONE ---
-    function initRegisterPage() {
-        const form = document.getElementById('form-register');
-        if (!form) return;
-        form.onsubmit = async (e) => {
-            e.preventDefault();
-            const alertBox = document.getElementById('alert-container');
-            if (form.password.value !== form.confirmPassword.value) {
-                alertBox.innerHTML = '<div class="alert alert-danger py-2 small">Le password non coincidono.</div>';
-                return;
-            }
-            if (form.region.value !== 'Piemonte') {
-                alertBox.innerHTML = '<div class="alert alert-warning py-2 small">Piemarket è riservato ai residenti in Piemonte.</div>';
-                return;
-            }
+        moduloLogin.onsubmit = async (evento) => {
+            evento.preventDefault();
+            const contenitoreAvvisi = document.getElementById('alert-container');
+
             try {
-                const res = await fetch('/api/register', {
+                const risposta = await fetch('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        username: form.username.value,
-                        email: form.email.value,
-                        password: form.password.value,
-                        confirmPassword: form.confirmPassword.value,
-                        region: form.region.value
+                        email: moduloLogin.email.value,
+                        password: moduloLogin.password.value
                     })
                 });
-                const data = await res.json();
-                if (res.ok) {
-                    setCurrentUser(data.user);
+
+                const dati = await risposta.json();
+                if (risposta.ok) {
+                    salvaUtenteCorrente(dati.user);
                     location.href = '/';
                 } else {
-                    alertBox.innerHTML = `<div class="alert alert-danger py-2 small">${data.error}</div>`;
+                    contenitoreAvvisi.innerHTML = `<div class="alert alert-danger py-2 small">${dati.error}</div>`;
                 }
             } catch {
-                alertBox.innerHTML = '<div class="alert alert-danger py-2 small">Errore di rete.</div>';
+                contenitoreAvvisi.innerHTML = '<div class="alert alert-danger py-2 small">Errore di connessione.</div>';
             }
         };
     }
 
-    // --- PAGINA HOME: ASTE DAL VIVO ---
-    function initHomePage() {
-        const grid = document.getElementById('announcements-grid');
-        if (!grid) return;
+    // --- 5. LOGICA DELLA PAGINA DI REGISTRAZIONE (/register) ---
+    function inizializzaPaginaRegistrazione() {
+        const moduloRegistrazione = document.getElementById('form-register');
+        if (!moduloRegistrazione) return;
 
-        let allAuctions = [];
-        let currentDetailAuction = null;
-        const emptyState = document.getElementById('empty-state');
-        const modalDetailEl = document.getElementById('modalDetail');
-        const modalDetail = modalDetailEl ? new bootstrap.Modal(modalDetailEl) : null;
-        const modalPublishEl = document.getElementById('modalPublish');
-        const modalPublish = modalPublishEl ? new bootstrap.Modal(modalPublishEl) : null;
+        moduloRegistrazione.onsubmit = async (evento) => {
+            evento.preventDefault();
+            const contenitoreAvvisi = document.getElementById('alert-container');
 
-        async function loadAuctions() {
+            // Controllo lato client: corrispondenza password
+            if (moduloRegistrazione.password.value !== moduloRegistrazione.confirmPassword.value) {
+                contenitoreAvvisi.innerHTML = '<div class="alert alert-danger py-2 small">Le password non coincidono.</div>';
+                return;
+            }
+
+            // Controllo lato client: vincolo Piemonte
+            if (moduloRegistrazione.region.value !== 'Piemonte') {
+                contenitoreAvvisi.innerHTML = '<div class="alert alert-warning py-2 small">Piemarket è riservato ai residenti in Piemonte.</div>';
+                return;
+            }
+
             try {
-                const res = await authFetch('/api/announcements');
-                if (res.ok) {
-                    const data = await res.json();
-                    allAuctions = data.announcements || [];
-                    render();
-                }
-            } catch {}
-        }
-
-        async function sendBid(auctionId, amount) {
-            try {
-                const res = await authFetch(`/api/announcements/${auctionId}/bid`, {
+                const risposta = await fetch('/api/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount })
+                    body: JSON.stringify({
+                        username: moduloRegistrazione.username.value,
+                        email: moduloRegistrazione.email.value,
+                        password: moduloRegistrazione.password.value,
+                        confirmPassword: moduloRegistrazione.confirmPassword.value,
+                        region: moduloRegistrazione.region.value
+                    })
                 });
-                const data = await res.json();
-                if (res.ok) {
-                    updateAuctionInState(data.announcement);
+
+                const dati = await risposta.json();
+                if (risposta.ok) {
+                    salvaUtenteCorrente(dati.user);
+                    location.href = '/';
                 } else {
-                    alert(data.error || 'Errore durante l\'offerta.');
+                    contenitoreAvvisi.innerHTML = `<div class="alert alert-danger py-2 small">${dati.error}</div>`;
+                }
+            } catch {
+                contenitoreAvvisi.innerHTML = '<div class="alert alert-danger py-2 small">Errore di connessione.</div>';
+            }
+        };
+    }
+
+    // --- 6. LOGICA DELLA PAGINA HOME: ASTE DAL VIVO (/) ---
+    function inizializzaPaginaHome() {
+        const grigliaAste = document.getElementById('announcements-grid');
+        if (!grigliaAste) return;
+
+        let elencoAste = [];
+        let astaDettaglioCorrente = null;
+
+        const messaggioVuoto = document.getElementById('empty-state');
+        const elementoModaleDettaglio = document.getElementById('modalDetail');
+        const modaleDettaglio = elementoModaleDettaglio ? new bootstrap.Modal(elementoModaleDettaglio) : null;
+        const elementoModalePubblica = document.getElementById('modalPublish');
+        const modalePubblica = elementoModalePubblica ? new bootstrap.Modal(elementoModalePubblica) : null;
+
+        /**
+         * Richiede al server l'elenco aggiornato delle aste e ridisegna la pagina.
+         */
+        async function caricaAste() {
+            try {
+                const risposta = await richiestaAutenticata('/api/announcements');
+                if (risposta.ok) {
+                    const dati = await risposta.json();
+                    elencoAste = dati.announcements || [];
+                    aggiornaGraficaAste();
+                }
+            } catch (_) {}
+        }
+
+        /**
+         * Invia una nuova offerta (rilancio) per una determinata asta.
+         */
+        async function inviaOfferta(idAsta, importo) {
+            try {
+                const risposta = await richiestaAutenticata(`/api/announcements/${idAsta}/bid`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: importo })
+                });
+
+                const dati = await risposta.json();
+                if (risposta.ok) {
+                    aggiornaAstaInMemoria(dati.announcement);
+                } else {
+                    alert(dati.error || 'Errore durante l\'offerta.');
                 }
             } catch {
                 alert('Errore di connessione durante l\'offerta.');
             }
         }
 
-        function updateAuctionInState(updated) {
-            const idx = allAuctions.findIndex(a => a.id === updated.id);
-            if (idx !== -1) allAuctions[idx] = updated;
-            render();
-            if (currentDetailAuction && currentDetailAuction.id === updated.id) {
-                currentDetailAuction = updated;
-                renderDetailModal();
+        /**
+         * Aggiorna un'asta sia nell'array locale che nel modale se aperto.
+         */
+        function aggiornaAstaInMemoria(astaAggiornata) {
+            const indice = elencoAste.findIndex(a => a.id === astaAggiornata.id);
+            if (indice !== -1) elencoAste[indice] = astaAggiornata;
+            aggiornaGraficaAste();
+
+            if (astaDettaglioCorrente && astaDettaglioCorrente.id === astaAggiornata.id) {
+                astaDettaglioCorrente = astaAggiornata;
+                aggiornaModaleDettaglio();
             }
         }
 
-        function render() {
-            grid.innerHTML = '';
-            if (emptyState) emptyState.classList.toggle('d-none', allAuctions.length > 0);
-            const user = getCurrentUser();
+        /**
+         * Genera dinamicamente le card HTML per ciascuna asta presente in elencoAste.
+         */
+        function aggiornaGraficaAste() {
+            grigliaAste.innerHTML = '';
+            if (messaggioVuoto) {
+                messaggioVuoto.classList.toggle('d-none', elencoAste.length > 0);
+            }
 
-            allAuctions.forEach(item => {
-                const time = getRemainingTime(item.expiresAt);
-                const isEnded = item.status === 'ended' || time.ended;
-                const isOwner = user && user.id === item.userId;
-                const isHighest = user && user.id === item.highestBidderId;
+            const utente = ottieniUtenteCorrente();
 
-                const col = document.createElement('div');
-                col.className = 'col-md-6 col-lg-4 mb-4';
-                col.innerHTML = `
-                    <div class="card h-100 shadow-sm border-0 ${isEnded ? 'opacity-75' : ''}">
+            elencoAste.forEach(asta => {
+                const infoTempo = calcolaTempoRimanente(asta.expiresAt);
+                const eConclusa = asta.status === 'ended' || infoTempo.terminata;
+                const eProprietario = utente && utente.id === asta.userId;
+                const eMigliorOfferente = utente && utente.id === asta.highestBidderId;
+
+                const colonna = document.createElement('div');
+                colonna.className = 'col-md-6 col-lg-4 mb-4';
+                colonna.innerHTML = `
+                    <div class="card h-100 shadow-sm border-0 ${eConclusa ? 'opacity-75' : ''}">
                         <div class="announcement-img-container position-relative">
-                            <img src="${item.image}" alt="${item.title}" class="announcement-img" loading="lazy">
-                            <span class="badge ${time.cssClass} position-absolute top-0 start-0 m-2 px-3 py-2 fs-6 shadow-sm auction-timer-badge" data-expires="${item.expiresAt}">
-                                ${time.text}
+                            <img src="${asta.image}" alt="${asta.title}" class="announcement-img" loading="lazy">
+                            <span class="badge ${infoTempo.classeColore} position-absolute top-0 start-0 m-2 px-3 py-2 fs-6 shadow-sm auction-timer-badge" data-expires="${asta.expiresAt}">
+                                ${infoTempo.testo}
                             </span>
                             <span class="badge bg-dark position-absolute bottom-0 end-0 m-2 px-2 py-1 small">
-                                Base: ${item.startingPrice} €
+                                Base: ${asta.startingPrice} €
                             </span>
                         </div>
                         <div class="card-body d-flex flex-column">
-                            <h5 class="card-title fw-bold text-truncate mb-1">${item.title}</h5>
-                            <p class="card-text text-muted small text-truncate-2 flex-grow-1">${item.description}</p>
+                            <h5 class="card-title fw-bold text-truncate mb-1">${asta.title}</h5>
+                            <p class="card-text text-muted small text-truncate-2 flex-grow-1">${asta.description}</p>
                             <div class="p-3 my-2 rounded-3 bg-light border">
                                 <div class="d-flex justify-content-between align-items-center">
                                     <span class="small text-muted fw-semibold">Offerta Attuale:</span>
-                                    <span class="fs-4 fw-bold text-success">${item.currentBid} €</span>
+                                    <span class="fs-4 fw-bold text-success">${asta.currentBid} €</span>
                                 </div>
                                 <div class="d-flex justify-content-between align-items-center mt-1 pt-1 border-top small">
                                     <span class="text-muted">Miglior offerente:</span>
-                                    <strong class="${isHighest ? 'text-primary' : 'text-dark'}">
-                                        ${item.highestBidderUsername ? `${item.highestBidderUsername} ${isHighest ? '(Tu)' : ''}` : 'Nessuna offerta'}
+                                    <strong class="${eMigliorOfferente ? 'text-primary' : 'text-dark'}">
+                                        ${asta.highestBidderUsername ? `${asta.highestBidderUsername} ${eMigliorOfferente ? '(Tu)' : ''}` : 'Nessuna offerta'}
                                     </strong>
                                 </div>
                             </div>
                             <div class="mt-2">
-                                ${isEnded ? `
+                                ${eConclusa ? `
                                     <div class="alert alert-secondary py-2 mb-0 text-center small fw-semibold">
-                                        Asta conclusa! ${item.highestBidderUsername ? `Vinta da <strong>${item.highestBidderUsername}</strong> a ${item.currentBid} €` : 'Nessun acquirente'}
+                                        Asta conclusa! ${asta.highestBidderUsername ? `Vinta da <strong>${asta.highestBidderUsername}</strong> a ${asta.currentBid} €` : 'Nessun acquirente'}
                                     </div>
-                                ` : isOwner ? `
+                                ` : eProprietario ? `
                                     <div class="alert alert-info py-2 mb-0 text-center small">
                                         Questa è la tua asta. Non puoi rilanciare.
                                     </div>
                                 ` : `
+                                    <!-- Bottoni Rilancio Rapido (+1€ e +5€) -->
                                     <div class="d-flex gap-2 mb-2">
-                                        <button class="btn btn-outline-success btn-sm flex-fill fw-bold" onclick="PiemarketApp.bid('${item.id}', ${item.currentBid + 1})">
-                                            +1 € (${item.currentBid + 1} €)
+                                        <button class="btn btn-outline-success btn-sm flex-fill fw-bold" onclick="PiemarketApp.bid('${asta.id}', ${asta.currentBid + 1})">
+                                            +1 € (${asta.currentBid + 1} €)
                                         </button>
-                                        <button class="btn btn-success btn-sm flex-fill fw-bold" onclick="PiemarketApp.bid('${item.id}', ${item.currentBid + 5})">
-                                            +5 € (${item.currentBid + 5} €)
+                                        <button class="btn btn-success btn-sm flex-fill fw-bold" onclick="PiemarketApp.bid('${asta.id}', ${asta.currentBid + 5})">
+                                            +5 € (${asta.currentBid + 5} €)
                                         </button>
                                     </div>
+                                    <!-- Offerta libera personalizzata -->
                                     <div class="input-group input-group-sm mb-1">
                                         <span class="input-group-text">€</span>
-                                        <input type="number" class="form-control" id="custom-bid-${item.id}" placeholder="Offerta libera" min="${item.currentBid + 1}">
-                                        <button class="btn btn-primary" onclick="PiemarketApp.customBid('${item.id}', ${item.currentBid})">Offri</button>
+                                        <input type="number" class="form-control" id="custom-bid-${asta.id}" placeholder="Offerta libera" min="${asta.currentBid + 1}">
+                                        <button class="btn btn-primary" onclick="PiemarketApp.customBid('${asta.id}', ${asta.currentBid})">Offri</button>
                                     </div>
                                 `}
                             </div>
                         </div>
                         <div class="card-footer bg-white border-0 pt-0 pb-3">
-                            <button class="btn btn-outline-secondary btn-sm w-100" onclick="PiemarketApp.openDetail('${item.id}')">
-                                Storico rilanci (${item.bids ? item.bids.length : 0})
+                            <button class="btn btn-outline-secondary btn-sm w-100" onclick="PiemarketApp.openDetail('${asta.id}')">
+                                Storico rilanci (${asta.bids ? asta.bids.length : 0})
                             </button>
                         </div>
                     </div>
                 `;
-                grid.appendChild(col);
+                grigliaAste.appendChild(colonna);
             });
         }
 
-        function renderDetailModal() {
-            const a = currentDetailAuction;
-            if (!a) return;
-            const user = getCurrentUser();
-            const time = getRemainingTime(a.expiresAt);
-            const isEnded = a.status === 'ended' || time.ended;
-            const isOwner = user && user.id === a.userId;
+        /**
+         * Rende visibili le informazioni complete e la cronologia puntate nel modale.
+         */
+        function aggiornaModaleDettaglio() {
+            const asta = astaDettaglioCorrente;
+            if (!asta) return;
 
-            document.getElementById('detail-img').src = a.image;
-            document.getElementById('detail-title').textContent = a.title;
-            document.getElementById('detail-description').textContent = a.description;
-            document.getElementById('detail-starting-price').textContent = `${a.startingPrice} €`;
-            document.getElementById('detail-current-bid').textContent = `${a.currentBid} €`;
-            document.getElementById('detail-highest-bidder').textContent = a.highestBidderUsername || 'Nessuna offerta ancora';
+            const utente = ottieniUtenteCorrente();
+            const infoTempo = calcolaTempoRimanente(asta.expiresAt);
+            const eConclusa = asta.status === 'ended' || infoTempo.terminata;
+            const eProprietario = utente && utente.id === asta.userId;
 
-            const timerEl = document.getElementById('detail-timer');
-            timerEl.textContent = time.text;
-            timerEl.className = `fs-4 fw-bold ${time.ended ? 'text-secondary' : 'text-danger'}`;
+            document.getElementById('detail-img').src = asta.image;
+            document.getElementById('detail-title').textContent = asta.title;
+            document.getElementById('detail-description').textContent = asta.description;
+            document.getElementById('detail-starting-price').textContent = `${asta.startingPrice} €`;
+            document.getElementById('detail-current-bid').textContent = `${asta.currentBid} €`;
+            document.getElementById('detail-highest-bidder').textContent = asta.highestBidderUsername || 'Nessuna offerta ancora';
 
-            const bidsList = document.getElementById('detail-bids-list');
-            bidsList.innerHTML = (!a.bids || a.bids.length === 0)
+            const elementoTimer = document.getElementById('detail-timer');
+            elementoTimer.textContent = infoTempo.testo;
+            elementoTimer.className = `fs-4 fw-bold ${infoTempo.terminata ? 'text-secondary' : 'text-danger'}`;
+
+            // Rendering lista rilanci precedenti
+            const listaPuntate = document.getElementById('detail-bids-list');
+            listaPuntate.innerHTML = (!asta.bids || asta.bids.length === 0)
                 ? '<div class="text-muted text-center py-2">Nessun rilancio effettuato. Sii il primo!</div>'
-                : [...a.bids].reverse().map(b => `
+                : [...asta.bids].reverse().map(puntata => `
                     <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
-                        <span><strong>${b.username}</strong></span>
-                        <span class="text-success fw-bold">${b.amount} €</span>
-                        <span class="text-muted small">${new Date(b.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        <span><strong>${puntata.username}</strong></span>
+                        <span class="text-success fw-bold">${puntata.amount} €</span>
+                        <span class="text-muted small">${new Date(puntata.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                 `).join('');
 
-            const actionsEl = document.getElementById('detail-bid-actions');
-            if (isEnded) {
-                actionsEl.innerHTML = `<div class="alert alert-secondary text-center mb-0">Asta conclusa! Vincitore: <strong>${a.highestBidderUsername || 'Nessuno'}</strong> a <strong>${a.currentBid} €</strong></div>`;
-            } else if (isOwner) {
-                actionsEl.innerHTML = `<div class="alert alert-info text-center mb-0">Sei il proprietario di questa asta. Non puoi rilanciare.</div>`;
+            // Azioni rapide disponibili nel modale
+            const contenitoreAzioni = document.getElementById('detail-bid-actions');
+            if (eConclusa) {
+                contenitoreAzioni.innerHTML = `<div class="alert alert-secondary text-center mb-0">Asta conclusa! Vincitore: <strong>${asta.highestBidderUsername || 'Nessuno'}</strong> a <strong>${asta.currentBid} €</strong></div>`;
+            } else if (eProprietario) {
+                contenitoreAzioni.innerHTML = `<div class="alert alert-info text-center mb-0">Sei il proprietario di questa asta. Non puoi rilanciare.</div>`;
             } else {
-                actionsEl.innerHTML = `
+                contenitoreAzioni.innerHTML = `
                     <div class="d-flex gap-2">
-                        <button class="btn btn-outline-success flex-fill fw-bold" onclick="PiemarketApp.bid('${a.id}', ${a.currentBid + 1})">+1 € (${a.currentBid + 1} €)</button>
-                        <button class="btn btn-success flex-fill fw-bold" onclick="PiemarketApp.bid('${a.id}', ${a.currentBid + 5})">+5 € (${a.currentBid + 5} €)</button>
+                        <button class="btn btn-outline-success flex-fill fw-bold" onclick="PiemarketApp.bid('${asta.id}', ${asta.currentBid + 1})">+1 € (${asta.currentBid + 1} €)</button>
+                        <button class="btn btn-success flex-fill fw-bold" onclick="PiemarketApp.bid('${asta.id}', ${asta.currentBid + 5})">+5 € (${asta.currentBid + 5} €)</button>
                     </div>
                 `;
             }
         }
 
-        // Pubblicazione nuova asta
-        if (modalPublishEl) {
-            const formPublish = document.getElementById('form-publish');
-            formPublish.onsubmit = async (e) => {
-                e.preventDefault();
-                const btn = document.getElementById('btn-submit-publish');
-                btn.disabled = true;
+        // Pubblicazione nuova asta tramite il form del modale
+        if (elementoModalePubblica) {
+            const moduloPubblica = document.getElementById('form-publish');
+            moduloPubblica.onsubmit = async (evento) => {
+                evento.preventDefault();
+                const bottoneInvio = document.getElementById('btn-submit-publish');
+                bottoneInvio.disabled = true;
+
                 try {
-                    const res = await authFetch('/api/announcements', { method: 'POST', body: new FormData(formPublish) });
-                    const data = await res.json();
-                    btn.disabled = false;
-                    if (res.ok) {
-                        formPublish.reset();
-                        modalPublish.hide();
+                    const datiForm = new FormData(moduloPubblica);
+                    const risposta = await richiestaAutenticata('/api/announcements', {
+                        method: 'POST',
+                        body: datiForm
+                    });
+
+                    const dati = await risposta.json();
+                    bottoneInvio.disabled = false;
+
+                    if (risposta.ok) {
+                        moduloPubblica.reset();
+                        modalePubblica.hide();
                     } else {
-                        alert(data.error || 'Errore creazione asta.');
+                        alert(dati.error || 'Errore creazione asta.');
                     }
                 } catch {
-                    btn.disabled = false;
+                    bottoneInvio.disabled = false;
                     alert('Errore di connessione.');
                 }
             };
         }
 
-        // Aggiornamento per-secondo del timer a schermo
+        // Timer periodico nel browser: aggiorna ogni secondo i testi del countdown
         setInterval(() => {
-            document.querySelectorAll('.auction-timer-badge').forEach(b => {
-                const info = getRemainingTime(b.getAttribute('data-expires'));
-                b.textContent = info.text;
-                b.className = `badge ${info.cssClass} position-absolute top-0 start-0 m-2 px-3 py-2 fs-6 shadow-sm auction-timer-badge`;
+            document.querySelectorAll('.auction-timer-badge').forEach(badge => {
+                const info = calcolaTempoRimanente(badge.getAttribute('data-expires'));
+                badge.textContent = info.testo;
+                badge.className = `badge ${info.classeColore} position-absolute top-0 start-0 m-2 px-3 py-2 fs-6 shadow-sm auction-timer-badge`;
             });
-            if (currentDetailAuction) {
-                const timerEl = document.getElementById('detail-timer');
-                if (timerEl) timerEl.textContent = getRemainingTime(currentDetailAuction.expiresAt).text;
+
+            if (astaDettaglioCorrente) {
+                const elementoTimerDettaglio = document.getElementById('detail-timer');
+                if (elementoTimerDettaglio) {
+                    elementoTimerDettaglio.textContent = calcolaTempoRimanente(astaDettaglioCorrente.expiresAt).testo;
+                }
             }
         }, 1000);
 
-        // Esposizione funzioni globali per i click degli utenti
+        // Esposizione funzioni globali nell'oggetto PiemarketApp per gli handler onclick
         window.PiemarketApp = {
-            bid: sendBid,
-            customBid: (id, current) => {
-                const input = document.getElementById(`custom-bid-${id}`);
-                const amount = parseFloat(input?.value);
-                if (isNaN(amount) || amount <= current) {
-                    alert(`L'offerta deve essere superiore a ${current} €.`);
+            inviaOfferta,
+            bid: inviaOfferta, // Alias compatibilità
+            inviaOffertaPersonalizzata: (id, offertaCorrente) => {
+                const campoInput = document.getElementById(`custom-bid-${id}`);
+                const valoreOfferta = parseFloat(campoInput?.value);
+                if (isNaN(valoreOfferta) || valoreOfferta <= offertaCorrente) {
+                    alert(`L'offerta deve essere superiore all'offerta attuale (${offertaCorrente} €).`);
                     return;
                 }
-                sendBid(id, amount);
+                inviaOfferta(id, valoreOfferta);
             },
-            openDetail: (id) => {
-                currentDetailAuction = allAuctions.find(a => a.id === id);
-                if (currentDetailAuction) {
-                    renderDetailModal();
-                    modalDetail.show();
+            customBid: (id, offertaCorrente) => window.PiemarketApp.inviaOffertaPersonalizzata(id, offertaCorrente),
+            apriDettaglioAsta: (id) => {
+                astaDettaglioCorrente = elencoAste.find(a => a.id === id);
+                if (astaDettaglioCorrente) {
+                    aggiornaModaleDettaglio();
+                    modaleDettaglio.show();
                 }
-            }
+            },
+            openDetail: (id) => window.PiemarketApp.apriDettaglioAsta(id)
         };
 
-        // Eventi WebSocket in tempo reale
-        onWsEvent('NEW_ANNOUNCEMENT', (item) => { allAuctions.unshift(item); render(); });
-        onWsEvent('BID_PLACED', updateAuctionInState);
-        onWsEvent('AUCTION_ENDED', (ended) => {
-            const item = allAuctions.find(a => a.id === ended.id);
-            if (item) item.status = 'ended';
-            render();
-            if (currentDetailAuction && currentDetailAuction.id === ended.id) {
-                currentDetailAuction.status = 'ended';
-                renderDetailModal();
+        // Gestione degli eventi WebSocket in tempo reale
+        registraEventoWebSocket('NEW_ANNOUNCEMENT', (nuovaAsta) => {
+            elencoAste.unshift(nuovaAsta);
+            aggiornaGraficaAste();
+        });
+
+        registraEventoWebSocket('BID_PLACED', aggiornaAstaInMemoria);
+
+        registraEventoWebSocket('AUCTION_ENDED', (astaTerminata) => {
+            const asta = elencoAste.find(a => a.id === astaTerminata.id);
+            if (asta) asta.status = 'ended';
+            aggiornaGraficaAste();
+            if (astaDettaglioCorrente && astaDettaglioCorrente.id === astaTerminata.id) {
+                astaDettaglioCorrente.status = 'ended';
+                aggiornaModaleDettaglio();
             }
         });
-        onWsEvent('ANNOUNCEMENT_REMOVED', ({ id }) => {
-            allAuctions = allAuctions.filter(a => a.id !== id);
-            render();
+
+        registraEventoWebSocket('ANNOUNCEMENT_REMOVED', ({ id }) => {
+            elencoAste = elencoAste.filter(a => a.id !== id);
+            aggiornaGraficaAste();
         });
 
-        loadAuctions();
+        // Caricamento iniziale delle aste
+        caricaAste();
     }
 
-    // --- PAGINA LE MIE ASTE ---
-    function initMyAuctionsPage() {
-        const container = document.getElementById('my-announcements-container');
-        if (!container) return;
-        const empty = document.getElementById('my-empty-state');
+    // --- 7. LOGICA DELLA PAGINA "LE MIE ASTE" (/my-announcements) ---
+    function inizializzaPaginaMieAste() {
+        const contenitoreMieAste = document.getElementById('my-announcements-container');
+        if (!contenitoreMieAste) return;
 
-        async function load() {
+        const messaggioVuoto = document.getElementById('my-empty-state');
+
+        async function caricaMieAste() {
             try {
-                const res = await authFetch('/api/announcements/my');
-                if (res.ok) {
-                    const data = await res.json();
-                    render(data.announcements || []);
+                const risposta = await richiestaAutenticata('/api/announcements/my');
+                if (risposta.ok) {
+                    const dati = await risposta.json();
+                    renderizzaMieAste(dati.announcements || []);
                 }
-            } catch {}
+            } catch (_) {}
         }
 
-        function render(list) {
-            container.innerHTML = '';
-            if (empty) empty.classList.toggle('d-none', list.length > 0);
-            list.forEach(item => {
-                const time = getRemainingTime(item.expiresAt);
-                const isEnded = item.status === 'ended' || time.ended;
-                const col = document.createElement('div');
-                col.className = 'col-md-6 col-lg-4 mb-4';
-                col.innerHTML = `
+        function renderizzaMieAste(lista) {
+            contenitoreMieAste.innerHTML = '';
+            if (messaggioVuoto) {
+                messaggioVuoto.classList.toggle('d-none', lista.length > 0);
+            }
+
+            lista.forEach(asta => {
+                const infoTempo = calcolaTempoRimanente(asta.expiresAt);
+                const eConclusa = asta.status === 'ended' || infoTempo.terminata;
+
+                const colonna = document.createElement('div');
+                colonna.className = 'col-md-6 col-lg-4 mb-4';
+                colonna.innerHTML = `
                     <div class="card h-100 shadow-sm border-0">
                         <div class="announcement-img-container position-relative">
-                            <img src="${item.image}" alt="${item.title}" class="announcement-img">
-                            <span class="badge ${time.cssClass} position-absolute top-0 start-0 m-2 px-2 py-1">${time.text}</span>
+                            <img src="${asta.image}" alt="${asta.title}" class="announcement-img">
+                            <span class="badge ${infoTempo.classeColore} position-absolute top-0 start-0 m-2 px-2 py-1">${infoTempo.testo}</span>
                         </div>
                         <div class="card-body">
-                            <h5 class="card-title fw-bold text-truncate">${item.title}</h5>
-                            <p class="card-text text-muted small text-truncate-2">${item.description}</p>
+                            <h5 class="card-title fw-bold text-truncate">${asta.title}</h5>
+                            <p class="card-text text-muted small text-truncate-2">${asta.description}</p>
                             <div class="p-2 bg-light rounded border small mb-2">
-                                <div>Base d'asta: <strong>${item.startingPrice} €</strong></div>
-                                <div>Offerta più alta: <strong class="text-success">${item.currentBid} €</strong></div>
-                                <div>Miglior offerente: <strong>${item.highestBidderUsername || 'Nessuno'}</strong></div>
-                                <div>Totale rilanci: <strong>${item.bids ? item.bids.length : 0}</strong></div>
+                                <div>Base d'asta: <strong>${asta.startingPrice} €</strong></div>
+                                <div>Offerta più alta: <strong class="text-success">${asta.currentBid} €</strong></div>
+                                <div>Miglior offerente: <strong>${asta.highestBidderUsername || 'Nessuno'}</strong></div>
+                                <div>Totale rilanci: <strong>${asta.bids ? asta.bids.length : 0}</strong></div>
                             </div>
                         </div>
                         <div class="card-footer bg-white border-0 pt-0 pb-3">
-                            ${(!item.bids || item.bids.length === 0) && !isEnded ? `
-                                <button class="btn btn-outline-danger btn-sm w-100" onclick="PiemarketApp.deleteAuction('${item.id}')">
+                            ${(!asta.bids || asta.bids.length === 0) && !eConclusa ? `
+                                <button class="btn btn-outline-danger btn-sm w-100" onclick="PiemarketApp.deleteAuction('${asta.id}')">
                                     Annulla Asta
                                 </button>
-                            ` : `<div class="text-center small text-muted fst-italic">${isEnded ? 'Asta conclusa' : 'Asta con offerte attive'}</div>`}
+                            ` : `<div class="text-center small text-muted fst-italic">${eConclusa ? 'Asta conclusa' : 'Asta con offerte attive'}</div>`}
                         </div>
                     </div>
                 `;
-                container.appendChild(col);
+                contenitoreMieAste.appendChild(colonna);
             });
         }
 
+        // Funzione per eliminare/annullare una propria asta
         window.PiemarketApp = window.PiemarketApp || {};
-        window.PiemarketApp.deleteAuction = async (id) => {
+        window.PiemarketApp.eliminaAsta = async (id) => {
             if (!confirm('Sei sicuro di voler annullare questa asta?')) return;
-            const res = await authFetch(`/api/announcements/${id}`, { method: 'DELETE' });
-            if (res.ok) load();
+            const risposta = await richiestaAutenticata(`/api/announcements/${id}`, { method: 'DELETE' });
+            if (risposta.ok) caricaMieAste();
         };
+        window.PiemarketApp.deleteAuction = (id) => window.PiemarketApp.eliminaAsta(id);
 
-        onWsEvent('BID_PLACED', load);
-        onWsEvent('AUCTION_ENDED', load);
-        load();
+        // Aggiorna la vista quando arrivano eventi WebSocket pertinenti
+        registraEventoWebSocket('BID_PLACED', caricaMieAste);
+        registraEventoWebSocket('AUCTION_ENDED', caricaMieAste);
+
+        caricaMieAste();
     }
 
+    // --- 8. AVVIO GENERALE AL CARICAMENTO DELLA PAGINA ---
     document.addEventListener('DOMContentLoaded', () => {
-        handleNavigation();
-        initWebSocket();
-        initLoginPage();
-        initRegisterPage();
-        initHomePage();
-        initMyAuctionsPage();
+        gestisciNavigazione();
+        inizializzaWebSocket();
+        inizializzaPaginaLogin();
+        inizializzaPaginaRegistrazione();
+        inizializzaPaginaHome();
+        inizializzaPaginaMieAste();
     });
 })();
